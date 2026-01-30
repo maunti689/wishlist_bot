@@ -8,19 +8,26 @@ from keyboards import get_main_keyboard, get_back_keyboard
 from states import ManageCategoryStates
 from database.crud import CategoryCRUD
 from utils.cleanup import add_ephemeral_message, cleanup_ephemeral_messages, schedule_delete_message
+from utils.localization import translate_text, get_user_language, get_value_variants
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-@router.message(F.text == "🔑 Ввести код")
-async def enter_code_start(message: Message, state: FSMContext):
+@router.message(F.text.in_(get_value_variants("buttons.enter_code")))
+async def enter_code_start(message: Message, user, state: FSMContext):
     """Начало ввода кода доступа"""
     logger.info(f"Пользователь {message.from_user.id} нажал 'Ввести код'")
     
+    language = get_user_language(user)
     msg = await message.answer(
-        "🔑 Введите 6-значный код доступа к категории:\n\n"
-        "Код должен выглядеть примерно так: `123456`",
-        reply_markup=get_back_keyboard(),
+        translate_text(
+            language,
+            "🔑 Enter a 6-digit access code for a category.\n\n"
+            "The code should look like `123456`",
+            "🔑 Введите 6-значный код доступа к категории.\n\n"
+            "Код должен выглядеть примерно так: `123456`"
+        ),
+        reply_markup=get_back_keyboard(language=language),
         parse_mode="Markdown"
     )
     await state.set_state(ManageCategoryStates.enter_access_code)
@@ -30,20 +37,21 @@ async def enter_code_start(message: Message, state: FSMContext):
 async def process_access_code(message: Message, session: AsyncSession, user, state: FSMContext):
     """Обработка кода доступа"""
     logger.info(f"Обработка кода доступа: {message.text}")
+    language = get_user_language(user)
     
     # Обработка кнопки "Назад"
-    if message.text == "◀️ Назад":
+    if message.text in get_value_variants("buttons.back"):
         await state.clear()
         await message.answer(
-            "🏠 Главное меню",
-            reply_markup=get_main_keyboard()
+            translate_text(language, "🏠 Main menu", "🏠 Главное меню"),
+            reply_markup=get_main_keyboard(language=language)
         )
         return
     
     if not message.text:
         msg = await message.answer(
-            "❌ Код не может быть пустым. Попробуйте еще раз:",
-            reply_markup=get_back_keyboard()
+            translate_text(language, "❌ The code cannot be empty. Try again:", "❌ Код не может быть пустым. Попробуйте еще раз:"),
+            reply_markup=get_back_keyboard(language=language)
         )
         await add_ephemeral_message(state, msg.message_id)
         return
@@ -52,8 +60,8 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
     
     if len(code) != 6 or not code.isdigit():
         await message.answer(
-            "❌ Код должен состоять из 6 цифр. Попробуйте еще раз:",
-            reply_markup=get_back_keyboard()
+            translate_text(language, "❌ The code must contain 6 digits. Try again:", "❌ Код должен состоять из 6 цифр. Попробуйте еще раз:"),
+            reply_markup=get_back_keyboard(language=language)
         )
         return
     
@@ -62,8 +70,8 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
         category_id = int(code[:3])
     except ValueError:
         msg = await message.answer(
-            "❌ Некорректный код. Попробуйте еще раз:",
-            reply_markup=get_back_keyboard()
+            translate_text(language, "❌ Invalid code. Try again:", "❌ Некорректный код. Попробуйте еще раз:"),
+            reply_markup=get_back_keyboard(language=language)
         )
         await add_ephemeral_message(state, msg.message_id)
         return
@@ -74,8 +82,8 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
     except Exception as e:
         logger.error(f"Ошибка получения категории: {e}")
         msg = await message.answer(
-            "❌ Произошла ошибка при поиске категории. Попробуйте позже.",
-            reply_markup=get_main_keyboard()
+            translate_text(language, "❌ An error occurred while searching for the category. Try again later.", "❌ Произошла ошибка при поиске категории. Попробуйте позже."),
+            reply_markup=get_main_keyboard(language=language)
         )
         await state.clear()
         schedule_delete_message(message.bot, message.chat.id, msg.message_id, delay=10)
@@ -83,8 +91,8 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
     
     if not category:
         msg = await message.answer(
-            "❌ Категория с таким кодом не найдена.",
-            reply_markup=get_main_keyboard()
+            translate_text(language, "❌ No category found for this code.", "❌ Категория с таким кодом не найдена."),
+            reply_markup=get_main_keyboard(language=language)
         )
         await state.clear()
         schedule_delete_message(message.bot, message.chat.id, msg.message_id, delay=10)
@@ -92,8 +100,8 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
     
     if category.sharing_type == "private":
         msg = await message.answer(
-            "❌ Эта категория является личной и недоступна для доступа.",
-            reply_markup=get_main_keyboard()
+            translate_text(language, "❌ This category is private and cannot be shared.", "❌ Эта категория является личной и недоступна для доступа."),
+            reply_markup=get_main_keyboard(language=language)
         )
         await state.clear()
         schedule_delete_message(message.bot, message.chat.id, msg.message_id, delay=10)
@@ -101,8 +109,12 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
     
     if category.owner_id == user.id:
         msg = await message.answer(
-            f"ℹ️ Это ваша собственная категория '{category.name}'.",
-            reply_markup=get_main_keyboard()
+            translate_text(
+                language,
+                f"ℹ️ This is your own category '{category.name}'.",
+                f"ℹ️ Это ваша собственная категория '{category.name}'."
+            ),
+            reply_markup=get_main_keyboard(language=language)
         )
         await state.clear()
         schedule_delete_message(message.bot, message.chat.id, msg.message_id, delay=10)
@@ -114,8 +126,8 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
     except Exception as e:
         logger.error(f"Ошибка проверки доступа: {e}")
         await message.answer(
-            "❌ Произошла ошибка при проверке доступа.",
-            reply_markup=get_main_keyboard()
+            translate_text(language, "❌ Failed to verify access.", "❌ Произошла ошибка при проверке доступа."),
+            reply_markup=get_main_keyboard(language=language)
         )
         await state.clear()
         return
@@ -125,8 +137,12 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
         await cleanup_ephemeral_messages(message.bot, state, message.chat.id)
         await state.clear()
         msg = await message.answer(
-            f"ℹ️ У вас уже есть доступ к категории '{category.name}'.",
-            reply_markup=get_main_keyboard()
+            translate_text(
+                language,
+                f"ℹ️ You already have access to category '{category.name}'.",
+                f"ℹ️ У вас уже есть доступ к категории '{category.name}'."
+            ),
+            reply_markup=get_main_keyboard(language=language)
         )
         schedule_delete_message(message.bot, message.chat.id, msg.message_id, delay=10)
         return
@@ -136,16 +152,27 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
         can_edit = category.sharing_type == "collaborative"
         await CategoryCRUD.add_user_access(session, category.id, user.id, can_edit)
         
-        access_type = "редактирования" if can_edit else "просмотра"
+        access_type = translate_text(language, "editing", "редактирования") if can_edit else translate_text(language, "viewing", "просмотра")
         
         # Очистка временных сообщений
         await cleanup_ephemeral_messages(message.bot, state, message.chat.id)
         await state.clear()
+        action_text = translate_text(
+            language,
+            "add and edit items" if can_edit else "view items",
+            "добавлять и редактировать элементы" if can_edit else "просматривать элементы"
+        )
         msg = await message.answer(
-            f"✅ Вы получили доступ для {access_type} к категории:\n"
-            f"📁 **{category.name}**\n\n"
-            f"Теперь вы можете {'добавлять и редактировать элементы' if can_edit else 'просматривать элементы'} в этой категории.",
-            reply_markup=get_main_keyboard(),
+            translate_text(
+                language,
+                f"✅ You now have {access_type} access to:\n"
+                f"📁 **{category.name}**\n\n"
+                f"You can now {action_text} in this category.",
+                f"✅ Вы получили доступ для {access_type} к категории:\n"
+                f"📁 **{category.name}**\n\n"
+                f"Теперь вы можете {action_text} в этой категории."
+            ),
+            reply_markup=get_main_keyboard(language=language),
             parse_mode="Markdown"
         )
         schedule_delete_message(message.bot, message.chat.id, msg.message_id, delay=10)
@@ -153,8 +180,8 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
     except Exception as e:
         logger.error(f"Ошибка добавления доступа: {e}")
         msg = await message.answer(
-            "❌ Произошла ошибка при добавлении доступа. Попробуйте позже.",
-            reply_markup=get_main_keyboard()
+            translate_text(language, "❌ Failed to grant access. Please try again later.", "❌ Произошла ошибка при добавлении доступа. Попробуйте позже."),
+            reply_markup=get_main_keyboard(language=language)
         )
         await state.clear()
         schedule_delete_message(message.bot, message.chat.id, msg.message_id, delay=10)

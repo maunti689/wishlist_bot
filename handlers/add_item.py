@@ -35,13 +35,13 @@ async def add_item_start(message: Message, session: AsyncSession, user, state: F
         )
         return
     
-    # Проверяем наличие категорий
-    user_categories = await CategoryCRUD.get_user_categories(session, user.id)
+    # Проверяем наличие категорий, куда можно добавлять элементы
+    editable_categories = await CategoryCRUD.get_user_editable_categories(session, user.id)
     
-    if not user_categories:
+    if not editable_categories:
         await message.answer(
-            "❌ Сначала создайте хотя бы одну категорию!\n"
-            "Нажмите '📁 Добавить категорию'",
+            "❌ У вас нет категорий, где можно добавлять элементы.\n"
+            "Создайте свою категорию или попросите владельца поделиться правами на редактирование.",
             reply_markup=get_main_keyboard()
         )
         return
@@ -78,8 +78,15 @@ async def process_item_name(message: Message, session: AsyncSession, user, state
     name = message.text.strip()
     await state.update_data(name=name)
     
-    # Показываем категории
-    categories = await CategoryCRUD.get_user_categories(session, user.id)
+    # Показываем категории, доступные для редактирования
+    categories = await CategoryCRUD.get_user_editable_categories(session, user.id)
+    if not categories:
+        await state.clear()
+        await message.answer(
+            "❌ Нет категорий, куда можно добавить элемент. Попробуйте позже.",
+            reply_markup=get_main_keyboard()
+        )
+        return
     
     # Удаляем предыдущее сообщение бота
     data = await state.get_data()
@@ -112,6 +119,21 @@ async def process_item_name(message: Message, session: AsyncSession, user, state
 async def process_category_selection(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
     """Обработка выбора категории"""
     category_id = int(callback.data.split("category_")[1])
+
+    category = await CategoryCRUD.get_category_by_id(session, category_id)
+    if not category:
+        await callback.answer("❌ Категория не найдена", show_alert=True)
+        return
+
+    has_access = category.owner_id == user.id
+    if not has_access:
+        access = await CategoryCRUD.check_user_access(session, category_id, user.id)
+        has_access = bool(access and getattr(access, 'can_edit', False))
+
+    if not has_access:
+        await callback.answer("❌ У вас нет прав на добавление в эту категорию", show_alert=True)
+        return
+
     await state.update_data(category_id=category_id)
     
     # Получаем все данные
@@ -673,6 +695,20 @@ async def finish_item(callback: CallbackQuery, session: AsyncSession, user, stat
         return
     
     try:
+        category = await CategoryCRUD.get_category_by_id(session, category_id)
+        if not category:
+            await callback.answer("❌ Категория недоступна", show_alert=True)
+            return
+
+        has_access = category.owner_id == user.id
+        if not has_access:
+            access = await CategoryCRUD.check_user_access(session, category_id, user.id)
+            has_access = bool(access and getattr(access, 'can_edit', False))
+
+        if not has_access:
+            await callback.answer("❌ У вас нет прав добавлять элементы в эту категорию", show_alert=True)
+            return
+
         # Создаем элемент
         item_data = {
             'name': name,
@@ -695,9 +731,6 @@ async def finish_item(callback: CallbackQuery, session: AsyncSession, user, stat
         # Добавляем теги
         if selected_tags:
             await ItemCRUD.add_tags_to_item(session, item.id, selected_tags, user.id)
-        
-        # Получаем категорию для уведомлений
-        category = await CategoryCRUD.get_category_by_id(session, category_id)
         
         # Отправляем уведомления
         if category and category.sharing_type in ["view_only", "collaborative"]:

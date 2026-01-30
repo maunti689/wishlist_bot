@@ -19,48 +19,57 @@ from keyboards import (
 from utils.helpers import format_item_card
 from utils.cleanup import schedule_delete_message
 from utils.notifications import send_category_shared_notification, send_category_access_revoked_notification
+from utils.localization import translate as _, translate_text, get_user_language, get_value_variants
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-@router.message(F.text == "👥 Управление категориями")
+@router.message(F.text.in_(get_value_variants("buttons.manage_categories")))
 async def manage_categories_menu(message: Message, session: AsyncSession, user, state: FSMContext):
     """Главное меню управления категориями"""
     await state.clear()
     
     try:
+        language = get_user_language(user)
         categories = await CategoryCRUD.get_user_categories(session, user.id)
         
         if not categories:
             await message.answer(
-                "❌ У вас пока нет категорий.\n"
-                "Создайте первую категорию нажав '📁 Добавить категорию'",
-                reply_markup=get_main_keyboard()
+                translate_text(
+                    language,
+                    "❌ You don't have any categories yet.\nCreate one via '📁 Add category'",
+                    "❌ У вас пока нет категорий.\nСоздайте первую категорию нажав '📁 Добавить категорию'"
+                ),
+                reply_markup=get_main_keyboard(language=language)
             )
             return
         
         await message.answer(
-            "📂 Управление категориями\n\n"
-            "Выберите категорию для управления:",
-            reply_markup=get_categories_list_keyboard(categories, user.id)
+            translate_text(
+                language,
+                "📂 Category management\n\nChoose a category to manage:",
+                "📂 Управление категориями\n\nВыберите категорию для управления:"
+            ),
+            reply_markup=get_categories_list_keyboard(categories, user.id, language=language)
         )
     except Exception as e:
         logger.error(f"Ошибка в manage_categories_menu: {e}")
         await message.answer(
-            "❌ Произошла ошибка при загрузке категорий.",
-            reply_markup=get_main_keyboard()
+            translate_text(language, "❌ Failed to load categories.", "❌ Произошла ошибка при загрузке категорий."),
+            reply_markup=get_main_keyboard(language=language)
         )
 
 @router.callback_query(F.data.startswith("category_menu_"))
 async def category_menu(callback: CallbackQuery, session: AsyncSession, user):
     """Меню конкретной категории"""
     try:
+        language = get_user_language(user)
         category_id = int(callback.data.split("category_menu_")[1])
         
         category = await CategoryCRUD.get_category_by_id(session, category_id)
         
         if not category:
-            await callback.answer("❌ Категория не найдена")
+            await callback.answer(translate_text(language, "❌ Category not found", "❌ Категория не найдена"))
             return
         
         # Проверяем права доступа
@@ -72,34 +81,40 @@ async def category_menu(callback: CallbackQuery, session: AsyncSession, user):
         
         # Определяем тип доступа
         sharing_emoji = {
-            "private": "🔒 Личная",
-            "view_only": "👁 Только просмотр", 
-            "collaborative": "✍️ Общая"
+            "private": _("sharing.private", language=language),
+            "view_only": _("sharing.view_only", language=language), 
+            "collaborative": _("sharing.collaborative", language=language)
         }
         
-        sharing_text = sharing_emoji.get(category.sharing_type, "🔒 Личная")
+        sharing_text = sharing_emoji.get(category.sharing_type, _("sharing.private", language=language))
+        owner_text = translate_text(language, "You", "Вы") if is_owner else translate_text(language, "Another user", "Другой пользователь")
         
-        text = (
+        text = translate_text(
+            language,
+            f"📂 **{category.name}**\n\n"
+            f"🎯 Items: {items_count}\n"
+            f"👤 Owner: {owner_text}\n"
+            f"🔐 Access: {sharing_text}\n",
             f"📂 **{category.name}**\n\n"
             f"🎯 Элементов: {items_count}\n"
-            f"👤 Владелец: {'Вы' if is_owner else 'Другой пользователь'}\n"
+            f"👤 Владелец: {owner_text}\n"
             f"🔐 Тип доступа: {sharing_text}\n"
         )
         
         if category.sharing_type != "private":
             code = generate_access_code(category.id)
-            text += f"🔑 Код доступа: `{code}`\n"
+            text += translate_text(language, f"🔑 Access code: `{code}`\n", f"🔑 Код доступа: `{code}`\n")
         
         m = await callback.message.answer(
             text,
-            reply_markup=get_category_management_keyboard(category_id, is_owner),
+            reply_markup=get_category_management_keyboard(category_id, is_owner, language=language),
             parse_mode="Markdown"
         )
         # Это меню управления категорией можно оставить, поэтому без авто-удаления
         
     except Exception as e:
         logger.error(f"Ошибка в category_menu: {e}")
-        await callback.answer("❌ Произошла ошибка")
+        await callback.answer(translate_text(language, "❌ Something went wrong", "❌ Произошла ошибка"))
     
     await callback.answer()
 
@@ -107,24 +122,44 @@ async def category_menu(callback: CallbackQuery, session: AsyncSession, user):
 async def category_sharing_menu(callback: CallbackQuery, session: AsyncSession, user):
     """Меню настроек доступа к категории"""
     try:
+        language = get_user_language(user)
         category_id = int(callback.data.split("category_sharing_")[1])
         
         category = await CategoryCRUD.get_category_by_id(session, category_id)
         
         if not category or category.owner_id != user.id:
-            await callback.answer("❌ Категория не найдена или нет прав доступа")
+            await callback.answer(
+                translate_text(language, "❌ Category not found or insufficient rights", "❌ Категория не найдена или нет прав доступа")
+            )
             return
         
         # Получаем список пользователей с доступом
         shared_users_count = await CategoryCRUD.get_shared_users_count(session, category_id)
         
         sharing_text = {
-            "private": "🔒 **Личная** - только вы можете видеть и редактировать",
-            "view_only": "👁 **Только просмотр** - другие могут просматривать по коду",
-            "collaborative": "✍️ **Общая** - другие могут добавлять и редактировать элементы"
+            "private": translate_text(
+                language,
+                "🔒 **Private** - only you can view and edit",
+                "🔒 **Личная** - только вы можете видеть и редактировать"
+            ),
+            "view_only": translate_text(
+                language,
+                "👁 **View only** - others can view via code",
+                "👁 **Только просмотр** - другие могут просматривать по коду"
+            ),
+            "collaborative": translate_text(
+                language,
+                "✍️ **Collaborative** - others can add and edit items",
+                "✍️ **Общая** - другие могут добавлять и редактировать элементы"
+            )
         }
-        
-        text = (
+
+        text = translate_text(
+            language,
+            f"👥 Access management\n"
+            f"📂 Category: **{category.name}**\n\n"
+            f"Current type: {sharing_text.get(category.sharing_type, 'Unknown')}\n\n"
+            f"👥 Users with access: {shared_users_count}\n",
             f"👥 Управление доступом\n"
             f"📂 Категория: **{category.name}**\n\n"
             f"Текущий тип: {sharing_text.get(category.sharing_type, 'Неизвестный')}\n\n"
@@ -133,39 +168,40 @@ async def category_sharing_menu(callback: CallbackQuery, session: AsyncSession, 
         
         if category.sharing_type != "private":
             code = generate_access_code(category.id)
-            text += f"\n🔑 Код для доступа: `{code}`\n"
-            text += f"Отправьте этот код тем, кому хотите дать доступ."
+            text += translate_text(language, f"\n🔑 Access code: `{code}`\n", f"\n🔑 Код для доступа: `{code}`\n")
+            text += translate_text(language, "Share it with people who need access.", "Отправьте этот код тем, кому хотите дать доступ.")
         
         m = await callback.message.answer(
             text,
-            reply_markup=get_category_sharing_keyboard(category_id),
+            reply_markup=get_category_sharing_keyboard(category_id, language=language),
             parse_mode="Markdown"
         )
         schedule_delete_message(callback.bot, callback.message.chat.id, m.message_id, delay=30)
         
     except Exception as e:
         logger.error(f"Ошибка в category_sharing_menu: {e}")
-        await callback.answer("❌ Произошла ошибка")
+        await callback.answer(translate_text(language, "❌ Something went wrong", "❌ Произошла ошибка"))
     
     await callback.answer()
 
 @router.callback_query(F.data.startswith("change_sharing_type_"))
-async def change_sharing_type(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+async def change_sharing_type(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
     """Изменение типа доступа к категории"""
     try:
+        language = get_user_language(user)
         category_id = int(callback.data.split("change_sharing_type_")[1])
         
         await state.update_data(category_id=category_id)
         
         await callback.message.answer(
-            "🔐 Выберите новый тип доступа к категории:",
-            reply_markup=get_sharing_type_keyboard()
+            translate_text(language, "🔐 Choose a new access type:", "🔐 Выберите новый тип доступа к категории:"),
+            reply_markup=get_sharing_type_keyboard(language=language)
         )
         await state.set_state(ManageCategoryStates.change_sharing_type)
         
     except Exception as e:
         logger.error(f"Ошибка в change_sharing_type: {e}")
-        await callback.answer("❌ Произошла ошибка")
+        await callback.answer(translate_text(get_user_language(user), "❌ Something went wrong", "❌ Произошла ошибка"))
     
     await callback.answer()
 

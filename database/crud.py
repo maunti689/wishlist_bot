@@ -7,6 +7,7 @@ import json
 import logging
 
 from .models import User, Category, Item, Tag, Location, SharedCategory
+from utils.localization import DEFAULT_LANGUAGE, normalize_language
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,13 @@ class UserCRUD:
         result = await session.execute(select(User).where(User.telegram_id == telegram_id))
         user = result.scalar_one_or_none()
         if not user:
-            user = User(telegram_id=telegram_id, **kwargs)
+            language = normalize_language(kwargs.pop("language", DEFAULT_LANGUAGE))
+            user = User(telegram_id=telegram_id, language=language, **kwargs)
+            session.add(user)
+            await session.commit()
+            await session.refresh(user)
+        elif not getattr(user, "language", None):
+            user.language = DEFAULT_LANGUAGE
             session.add(user)
             await session.commit()
             await session.refresh(user)
@@ -31,6 +38,14 @@ class UserCRUD:
     async def update_user_notifications(session: AsyncSession, user_id: int, notifications_enabled: bool):
         await session.execute(
             update(User).where(User.id == user_id).values(notifications_enabled=notifications_enabled)
+        )
+        await session.commit()
+
+    @staticmethod
+    async def update_user_language(session: AsyncSession, user_id: int, language: str):
+        language = normalize_language(language)
+        await session.execute(
+            update(User).where(User.id == user_id).values(language=language)
         )
         await session.commit()
 
@@ -54,7 +69,27 @@ class CategoryCRUD:
                 )
             )
         ).order_by(Category.name)
-        
+
+        result = await session.execute(query)
+        return result.scalars().all()
+
+    @staticmethod
+    async def get_user_editable_categories(session: AsyncSession, user_id: int) -> List[Category]:
+        """Категории, где пользователь может редактировать (владелец или can_edit)."""
+        query = select(Category).options(selectinload(Category.items)).where(
+            or_(
+                Category.owner_id == user_id,
+                Category.id.in_(
+                    select(SharedCategory.category_id).where(
+                        and_(
+                            SharedCategory.user_id == user_id,
+                            SharedCategory.can_edit == True
+                        )
+                    )
+                )
+            )
+        ).order_by(Category.name)
+
         result = await session.execute(query)
         return result.scalars().all()
 

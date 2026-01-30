@@ -1,4 +1,17 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Float, Boolean, ForeignKey, create_engine, UniqueConstraint
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Text,
+    DateTime,
+    Float,
+    Boolean,
+    ForeignKey,
+    create_engine,
+    UniqueConstraint,
+    inspect,
+    text,
+)
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -17,6 +30,7 @@ class User(Base):
     last_name = Column(String(100))
     created_at = Column(DateTime, default=datetime.utcnow)
     notifications_enabled = Column(Boolean, default=True)
+    language = Column(String(5), default="en", nullable=False)
     
     # Связи
     categories = relationship("Category", back_populates="owner")
@@ -121,6 +135,7 @@ async def init_db():
     """Инициализация базы данных"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(ensure_language_column)
 
 async def get_session():
     """Получение сессии базы данных"""
@@ -129,3 +144,12 @@ async def get_session():
             yield session
         finally:
             await session.close()
+
+def ensure_language_column(connection):
+    """Добавляет колонку language в users, если она отсутствует."""
+    inspector = inspect(connection)
+    columns = [col['name'] for col in inspector.get_columns('users')]
+    if 'language' not in columns:
+        connection.execute(
+            text("ALTER TABLE users ADD COLUMN language VARCHAR(5) NOT NULL DEFAULT 'en'")
+        )

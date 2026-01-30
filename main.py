@@ -1,8 +1,10 @@
 import asyncio
+import contextlib
 import logging
 import os
 import sys
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import BOT_TOKEN
@@ -62,30 +64,18 @@ def release_lock():
     except Exception:
         pass
 
-async def main():
-    try:
-        # Guard от второго экземпляра
-        if not acquire_lock():
-            sys.exit(1)
-        
-        # Инициализация базы данных
-        logger.info("Инициализация базы данных...")
-        await init_db()
-        
-        # Создание бота и диспетчера
-        bot = Bot(token=BOT_TOKEN)
+async def run_bot() -> None:
+    """Создает экземпляры бота/диспетчера и запускает polling."""
+    async with Bot(token=BOT_TOKEN) as bot:
         dp = Dispatcher(storage=MemoryStorage())
-        
+
         # Подключение middleware
-        dp.message.middleware(DatabaseMiddleware())
-        dp.callback_query.middleware(DatabaseMiddleware())
+        db_middleware = DatabaseMiddleware()
+        dp.message.middleware(db_middleware)
+        dp.callback_query.middleware(db_middleware)
         dp.message.middleware(BackButtonMiddleware())
         dp.message.middleware(ChatCleanerMiddleware())
-        
-        # Можно добавить антиспам middleware
-        # dp.message.middleware(AntiSpamMiddleware(rate_limit=0.5))
-        # dp.callback_query.middleware(AntiSpamMiddleware(rate_limit=0.3))
-        
+
         # Регистрация роутеров (порядок важен!)
         dp.include_router(start.router)  # Должен быть первым для обработки /start
         dp.include_router(access_codes.router)
@@ -96,12 +86,12 @@ async def main():
         dp.include_router(filtering.router)
         dp.include_router(setting.router)
         dp.include_router(admin.router)  # Должен быть последним
-        
+
         # Глобальный обработчик ошибок
         @dp.errors()
         async def error_handler(event, **kwargs):
             logger.exception("Необработанная ошибка: %s", event.exception)
-            
+
             try:
                 from keyboards import get_main_keyboard
                 if event.update.message:
@@ -117,21 +107,50 @@ async def main():
                     await event.update.callback_query.answer()
             except Exception as e:
                 logger.error(f"Ошибка при обработке ошибки: {e}")
-            
+
             return True
-        
-        # Запуск планировщика уведомлений
+
+        # Запуск планировщика уведомлений и сохранение таска, чтобы его корректно остановить
         notification_scheduler = NotificationScheduler(bot)
-        asyncio.create_task(notification_scheduler.start())
-        
+        scheduler_task = asyncio.create_task(notification_scheduler.start())
+
         logger.info("Бот запущен и готов к работе")
-        await dp.start_polling(bot)
-        
-    except Exception as e:
-        logger.exception(f"Критическая ошибка при запуске бота: {e}")
+        try:
+            await dp.start_polling(bot)
+        finally:
+            # Останавливаем планировщик и дожидаемся завершения таска
+            await notification_scheduler.stop()
+            scheduler_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await scheduler_task
+
+
+async def main():
+    # Guard от второго экземпляра
+    if not acquire_lock():
+        sys.exit(1)
+
+    try:
+        # Инициализация базы данных
+        logger.info("Инициализация базы данных...")
+        await init_db()
+
+        retry_delay = 5
+        while True:
+            try:
+                await run_bot()
+                break  # Корректное завершение polling — выходим
+            except TelegramNetworkError as e:
+                logger.error(
+                    "Проблема с подключением к Telegram (%s). Перезапуск через %s секунд...",
+                    e,
+                    retry_delay,
+                )
+                await asyncio.sleep(retry_delay)
+            except Exception as e:
+                logger.exception(f"Критическая ошибка при запуске бота: {e}")
+                break
     finally:
-        if 'bot' in locals():
-            await bot.session.close()
         release_lock()
         logger.info("Бот остановлен")
 

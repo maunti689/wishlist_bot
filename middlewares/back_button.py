@@ -5,6 +5,7 @@ from typing import Dict, Any, Awaitable, Callable
 import logging
 from keyboards import get_main_keyboard
 from utils.cleanup import cleanup_ephemeral_messages
+from utils.localization import translate_text, get_user_language, get_value_variants
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ class BackButtonMiddleware(BaseMiddleware):
         event: Message,
         data: Dict[str, Any]
     ) -> Any:
-        if isinstance(event, Message) and event.text == "◀️ Назад":
+        if isinstance(event, Message) and event.text in get_value_variants("buttons.back"):
             state: FSMContext = data["state"]
             current_state = await state.get_state()
             
@@ -28,10 +29,13 @@ class BackButtonMiddleware(BaseMiddleware):
                 pass
             await state.clear()
             
+            user = data.get("user")
+            language = get_user_language(user)
+
             # Возвращаемся в главное меню
             await event.answer(
-                "🏠 Главное меню",
-                reply_markup=get_main_keyboard()
+                translate_text(language, "🏠 Main menu", "🏠 Главное меню"),
+                reply_markup=get_main_keyboard(language=language)
             )
             return
         
