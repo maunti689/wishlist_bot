@@ -1,55 +1,62 @@
 # Wishlist Bot
 
-Телеграм-бот для ведения персональных и совместных вишлистов: категории, фильтры, напоминания и гибкое разграничение доступа.
+A Telegram bot for managing personal and shared wishlists: categories, filters, reminders, and flexible access control.
 
-## Возможности
-- создание личных и общих категорий с кодами доступа (просмотр/редактирование)
-- добавление и редактирование элементов (цена, даты, теги, ссылки, фото, местоположение)
-- фильтрация по тегам, категориям, стоимости, типам и датам
-- уведомления о приближающихся датах и активность участников общих списков
-- мультиязычный интерфейс (RU/EN) и переводы для кнопок/меню
+## Features
+- Create personal and shared categories with access codes (view/edit permissions)
+- Add and edit wishlist items (price, dates, tags, links, photos, location)
+- Filtering by tags, categories, price ranges, item types, and dates
+- Reminders for upcoming dates and activity tracking for shared lists
+- Multilingual UI (RU/EN) with translated buttons and menus
 
-## Быстрый старт
-1. Установите Python 3.11+ и создайте виртуальное окружение.
-2. Установите зависимости:
+## Quick Start
+1. Install **Python 3.11+** and create a virtual environment.
+2. Install dependencies:
    ```bash
    pip install -r requirements.txt
-   ```
-3. Скопируйте `.env.example` в `.env` и заполните значения токена/настроек.
-4. Инициализируйте базу (будет создана автоматически при первом запуске).
-5. Запустите бота:
-   ```bash
-   python main.py
-   ```
 
-## Переменные окружения
-| Переменная      | Значение по умолчанию                 | Описание |
-|-----------------|---------------------------------------|----------|
-| `BOT_TOKEN`     | —                                     | **Обязательно.** Токен Telegram-бота от BotFather. |
-| `DATABASE_URL`  | `sqlite+aiosqlite:///./wishlist.db`   | URL базы данных (SQLite/aiosqlite по умолчанию). |
-| `TIMEZONE`      | `Europe/Moscow`                       | Часовой пояс для формата дат и уведомлений. |
-| `LOG_LEVEL`     | `INFO`                                | Уровень логирования (`DEBUG`, `INFO`, `WARNING`, ...). |
-| `USE_PID_LOCK`  | `0`                                   | Включить файл-блокировку `bot.pid` (`1`/`true`). |
-| `REDIS_URL`     | `redis://localhost:6379/0`            | URL Redis для persistent FSM и rate-limit'ов. |
-| `ACCESS_CODE_LENGTH` | `10`                            | Длина генерируемого кода доступа к категории. |
-| `ACCESS_CODE_MAX_ATTEMPTS` | `5`                      | Количество неверных попыток перед блокировкой. |
-| `ACCESS_CODE_BLOCK_SECONDS` | `900`                   | Длительность блокировки (секунды). |
+    Copy .env.example to .env and set your bot token and settings.
 
-## Запуск тестов
-```bash
+    Initialize the database (created automatically on the first run).
+
+    Run the bot:
+
+    python main.py
+
+Environment Variables
+Variable	Default	Description
+BOT_TOKEN	—	Required. Telegram bot token from BotFather.
+DATABASE_URL	sqlite+aiosqlite:///./wishlist.db	Database connection string (SQLite by default).
+TIMEZONE	Europe/Moscow	Time zone used for date formatting and reminders.
+LOG_LEVEL	INFO	Logging level (DEBUG, INFO, WARNING, ...).
+USE_PID_LOCK	0	Enable bot.pid lock file (1 / true).
+REDIS_URL	redis://localhost:6379/0	(Optional) Redis URL for persistent FSM storage or rate-limiting. Requires Redis setup and the redis Python package if enabled.
+ACCESS_CODE_LENGTH	10	Length of generated access codes for shared categories.
+ACCESS_CODE_MAX_ATTEMPTS	5	Maximum invalid attempts before temporary blocking.
+ACCESS_CODE_BLOCK_SECONDS	900	Block duration in seconds.
+Database Notes
+
+SQLite is used by default to keep the setup simple, dependency-free, and easy to run locally.
+The database layer is abstracted via SQLAlchemy, so switching to another SQL backend (e.g. PostgreSQL) only requires overriding the DATABASE_URL environment variable.
+
+This approach allows the project to stay lightweight for personal use while remaining portable to more production-oriented databases if needed.
+Running Tests
+
 pytest
-```
 
-## Миграции
-Для изменений схемы БД используйте SQL-файлы из каталога `migrations/`. Например, чтобы добавить уникальное ограничение на `shared_categories`, выполните:
+Migrations
 
-```bash
+Schema changes can be applied using SQL files from the migrations/ directory.
+
+Example (SQLite):
+
 sqlite3 wishlist.db < migrations/001_add_unique_shared_categories.sql
-```
 
-Для других СУБД адаптируйте запрос (DDL идентичен).
+For other SQL engines, adapt the command accordingly (DDL is mostly compatible).
+Notes
 
-## Полезно знать
-- Runtime-файлы (`.env`, `bot.log`, `wishlist.db`) исключены из Git — не добавляйте их вручную.
-- Логи пишутся в stdout, поэтому удобно использовать системный логгер/хостинговый агрегатор.
-- Для деплоя можно переопределять `DATABASE_URL` (например, PostgreSQL) и отключать `USE_PID_LOCK` в бездисковых средах.
+    Runtime files (.env, bot.log, wishlist.db) should not be committed to Git.
+
+    Logs are written to stdout, which works well with system loggers and hosting platforms.
+
+    For deployment, you can override DATABASE_URL (e.g. PostgreSQL) and disable USE_PID_LOCK in ephemeral or no-disk environments.
