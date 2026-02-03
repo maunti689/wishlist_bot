@@ -1,0 +1,39 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.build/
+.dist/
+
+# Virtualenvs
+.venv/
+.env/
+venv/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local databases and caches
+*.db
+*.sqlite3
+wishlist.db
+
+# Logs and runtime files
+*.log
+bot.log
+bot.pid
+
+# macOS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Test caches
+.pytest_cache/
+.mypy_cache/
+
+# Other
+*.pid

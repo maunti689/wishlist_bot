@@ -8,6 +8,8 @@ import logging
 
 from .models import User, Category, Item, Tag, Location, SharedCategory
 from utils.localization import DEFAULT_LANGUAGE, normalize_language
+from config import ACCESS_CODE_LENGTH
+from utils.helpers import generate_secure_code
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,7 @@ class CategoryCRUD:
 
     @staticmethod
     async def get_user_categories(session: AsyncSession, user_id: int) -> List[Category]:
-        # Получаем все категории, доступные пользователю
+        # Fetch every category available to the user
         query = select(Category).options(selectinload(Category.items)).where(
             or_(
                 Category.owner_id == user_id,
@@ -75,7 +77,6 @@ class CategoryCRUD:
 
     @staticmethod
     async def get_user_editable_categories(session: AsyncSession, user_id: int) -> List[Category]:
-        """Категории, где пользователь может редактировать (владелец или can_edit)."""
         query = select(Category).options(selectinload(Category.items)).where(
             or_(
                 Category.owner_id == user_id,
@@ -111,6 +112,13 @@ class CategoryCRUD:
         await session.commit()
 
     @staticmethod
+    async def update_share_link(session: AsyncSession, category_id: int, share_link: Optional[str]):
+        await session.execute(
+            update(Category).where(Category.id == category_id).values(share_link=share_link)
+        )
+        await session.commit()
+
+    @staticmethod
     async def update_category_name(session: AsyncSession, category_id: int, name: str):
         await session.execute(update(Category).where(Category.id == category_id).values(name=name))
         await session.commit()
@@ -123,7 +131,6 @@ class CategoryCRUD:
 
     @staticmethod
     async def revoke_all_shares(session: AsyncSession, category_id: int):
-        """Удаляет все записи доступа (SharedCategory) для категории."""
         await session.execute(delete(SharedCategory).where(SharedCategory.category_id == category_id))
         await session.commit()
 
@@ -143,9 +150,38 @@ class CategoryCRUD:
 
     @staticmethod
     async def add_user_access(session: AsyncSession, category_id: int, user_id: int, can_edit: bool = False):
+        existing = await CategoryCRUD.check_user_access(session, category_id, user_id)
+        if existing:
+            if existing.can_edit != can_edit:
+                existing.can_edit = can_edit
+                session.add(existing)
+                await session.commit()
+            return existing
+
         shared_category = SharedCategory(category_id=category_id, user_id=user_id, can_edit=can_edit)
         session.add(shared_category)
         await session.commit()
+        return shared_category
+
+    @staticmethod
+    async def generate_unique_share_code(session: AsyncSession, length: int = ACCESS_CODE_LENGTH) -> str:
+        for _ in range(40):
+            code = generate_secure_code(length)
+            existing = await CategoryCRUD.get_category_by_share_link(session, code)
+            if not existing:
+                return code
+        raise RuntimeError("Unable to generate unique share code")
+
+    @staticmethod
+    async def ensure_share_code(session: AsyncSession, category_id: int, length: int = ACCESS_CODE_LENGTH) -> str:
+        category = await CategoryCRUD.get_category_by_id(session, category_id)
+        if not category:
+            raise ValueError("Category not found")
+        if category.share_link and len(category.share_link) == length:
+            return category.share_link
+        code = await CategoryCRUD.generate_unique_share_code(session, length)
+        await CategoryCRUD.update_share_link(session, category_id, code)
+        return code
 
 class ItemCRUD:
     @staticmethod
@@ -165,7 +201,7 @@ class ItemCRUD:
 
     @staticmethod
     async def get_user_items(session: AsyncSession, user_id: int) -> List[Item]:
-        # Получаем элементы пользователя и из общих категорий
+        # Fetch both personal items and items shared with the user
         query = select(Item).options(selectinload(Item.category)).where(
             or_(
                 Item.owner_id == user_id,
@@ -183,8 +219,8 @@ class ItemCRUD:
         result = await session.execute(
             select(Item).options(selectinload(Item.category)).where(
                 or_(
-                    Item.owner_id == user_id,  # Свои элементы
-                    Item.category_id.in_(  # Элементы из доступных категорий
+                    Item.owner_id == user_id,  # Personal items
+                    Item.category_id.in_(  # Items from shared categories
                         select(Category.id).where(
                             or_(
                                 Category.owner_id == user_id,
@@ -228,21 +264,20 @@ class ItemCRUD:
 
     @staticmethod
     async def add_tags_to_item(session: AsyncSession, item_id: int, tag_names: List[str], user_id: int):
-        """Добавляет теги к элементу"""
         try:
-            # Получаем элемент
+            # Load the item first
             item = await ItemCRUD.get_item_by_id(session, item_id)
             if not item:
                 raise ValueError("Элемент не найден")
             
-            # Создаем или получаем теги
+            # Create or fetch tags
             tags = []
             for tag_name in tag_names:
                 tag = await TagCRUD.get_or_create_tag(session, tag_name, user_id)
                 tags.append(tag)
             
-            # Обновляем теги элемента (предполагаем, что в модели Item есть поле tags)
-            # Если теги хранятся как JSON строка
+            # Update item tags (Item.tags is expected to store JSON)
+            # When tags are stored as JSON strings
             current_tags = json.loads(item.tags) if item.tags else []
             for tag in tags:
                 if tag.name not in current_tags:
@@ -277,7 +312,7 @@ class ItemCRUD:
         if filters.get('category_id'):
             query = query.where(Item.category_id == filters['category_id'])
         if filters.get('tag'):
-            # Безопасный поиск по тегам
+            # Safe search by tags
             query = query.where(Item.tags.ilike(f'%{filters["tag"]}%'))
         if filters.get('price_min'):
             query = query.where(Item.price >= filters['price_min'])
@@ -310,18 +345,18 @@ class TagCRUD:
             if not clean_name:
                 raise ValueError("Название тега не может быть пустым")
             
-            # Ищем существующий тег
+            # Look up existing tag
             result = await session.execute(
                 select(Tag).where(and_(Tag.name == clean_name, Tag.user_id == user_id))
             )
             tag = result.scalar_one_or_none()
             
             if tag:
-                # Увеличиваем счетчик использования
+                # Increment usage counter
                 tag.usage_count += 1
                 await session.commit()
             else:
-                # Создаем новый тег
+                # Create a new tag record
                 tag = Tag(name=clean_name, user_id=user_id, usage_count=1)
                 session.add(tag)
                 await session.commit()
@@ -389,7 +424,6 @@ class LocationCRUD:
 
     @staticmethod
     async def get_location_by_id(session: AsyncSession, location_id: int) -> Optional[Location]:
-        """Получить локацию по id"""
         try:
             result = await session.execute(select(Location).where(Location.id == location_id))
             return result.scalar_one_or_none()

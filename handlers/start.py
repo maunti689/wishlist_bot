@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
 from keyboards import get_main_keyboard
+from utils.helpers import escape_markdown
 from utils.localization import translate_text, get_user_language, get_value_variants
 
 router = Router()
@@ -13,13 +14,11 @@ logger = logging.getLogger(__name__)
 
 @router.message(CommandStart())
 async def start_handler(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработчик команды /start"""
-    # Очищаем состояние
     await state.clear()
 
     language = get_user_language(user)
     fallback_name = translate_text(language, "friend", "друг")
-    name = user.first_name or fallback_name
+    name = escape_markdown(user.first_name) if user.first_name else escape_markdown(fallback_name)
     
     welcome_text = translate_text(
         language,
@@ -35,7 +34,6 @@ async def start_handler(message: Message, session: AsyncSession, user, state: FS
 
 @router.message(F.text.in_(get_value_variants("buttons.back")))
 async def back_to_main(message: Message, user, state: FSMContext):
-    """Возврат в главное меню"""
     current_state = await state.get_state()
     logger.info(f"Нажата кнопка 'Назад' в состоянии: {current_state}")
     

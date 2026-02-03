@@ -5,7 +5,7 @@ from typing import List, Optional
 from utils.localization import translate as _, DEFAULT_LANGUAGE
 
 def get_main_keyboard(language: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
-    """Главная клавиатура"""
+    """Main menu keyboard."""
     builder = ReplyKeyboardBuilder()
     builder.row(
         KeyboardButton(text=_("buttons.add_item", language=language)),
@@ -27,26 +27,26 @@ def get_main_keyboard(language: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True)
 
 def get_back_keyboard(language: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
-    """Клавиатура с кнопкой назад"""
+    """Keyboard with a Back button."""
     builder = ReplyKeyboardBuilder()
     builder.row(KeyboardButton(text=_("buttons.back", language=language)))
     return builder.as_markup(resize_keyboard=True)
 
 def get_skip_keyboard(language: str = DEFAULT_LANGUAGE) -> ReplyKeyboardMarkup:
-    """Клавиатура с кнопками пропустить и назад"""
+    """Keyboard that offers Skip and Back buttons."""
     builder = ReplyKeyboardBuilder()
     builder.row(KeyboardButton(text=_("buttons.skip", language=language)))
     builder.row(KeyboardButton(text=_("buttons.back", language=language)))
     return builder.as_markup(resize_keyboard=True)
 
 def get_skip_inline_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Инлайн-клавиатура с кнопкой пропустить"""
+    """Inline keyboard with a Skip button."""
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=_("buttons.skip", language=language), callback_data="skip_field"))
     return builder.as_markup()
 
 def get_categories_keyboard(categories: List, include_skip: bool = False, language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Инлайн-клавиатура с категориями"""
+    """Inline keyboard for category selection."""
     builder = InlineKeyboardBuilder()
     
     for category in categories:
@@ -67,19 +67,19 @@ def get_tags_keyboard(
     include_skip: bool = True,
     language: str = DEFAULT_LANGUAGE,
 ) -> InlineKeyboardMarkup:
-    """Инлайн-клавиатура с тегами"""
+    """Inline keyboard with tag buttons."""
     builder = InlineKeyboardBuilder()
     selected_tags = selected_tags or []
     
-    # Отображаем теги по 2 в ряд
+    # Display tags two per row
     for i in range(0, len(tags), 2):
         row_buttons = []
-        # Первая кнопка в ряду
+        # First button in the row
         tag = tags[i]
         text = f"✅ {tag.name}" if tag.name in selected_tags else tag.name
         row_buttons.append(InlineKeyboardButton(text=text, callback_data=f"tag_{tag.name}"))
         
-        # Вторая кнопка в ряду (если есть)
+        # Second button in the row (if available)
         if i + 1 < len(tags):
             tag = tags[i + 1]
             text = f"✅ {tag.name}" if tag.name in selected_tags else tag.name
@@ -106,7 +106,7 @@ def get_tags_keyboard(
     return builder.as_markup()
 
 def get_location_type_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Клавиатура выбора типа местоположения"""
+    """Keyboard to choose a location type."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=_("location.city", language=language), callback_data="location_type_city"),
@@ -126,10 +126,10 @@ def get_locations_keyboard(
     include_skip: bool = True,
     language: str = DEFAULT_LANGUAGE,
 ) -> InlineKeyboardMarkup:
-    """Клавиатура с местоположениями"""
+    """Keyboard listing saved locations."""
     builder = InlineKeyboardBuilder()
     
-    # Маппинг типов для callback_data
+    # Map descriptive types to callback suffixes
     type_mapping = {
         "в городе": "city",
         "за городом": "outside", 
@@ -159,7 +159,7 @@ def get_locations_keyboard(
     return builder.as_markup()
 
 def get_item_actions_keyboard(item_id: int, can_edit: bool = True, language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Клавиатура действий с элементом. Если нет прав на редактирование — кнопки скрыты."""
+    """Actions keyboard for an item; hides edit/delete when not allowed."""
     builder = InlineKeyboardBuilder()
     if can_edit:
         builder.row(
@@ -175,7 +175,7 @@ def get_item_actions_keyboard(item_id: int, can_edit: bool = True, language: str
     return builder.as_markup()
 
 def get_filter_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Клавиатура фильтрации"""
+    """Keyboard with filtering options."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=_("filters.by_category", language=language), callback_data="filter_category"),
@@ -195,7 +195,7 @@ def get_filter_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarku
     return builder.as_markup()
 
 def get_price_filter_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Клавиатура фильтрации по цене"""
+    """Keyboard with common price filters."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="< 1000", callback_data="price_max_1000"),
@@ -212,7 +212,7 @@ def get_price_filter_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboar
     return builder.as_markup()
 
 def get_date_filter_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Клавиатура фильтрации по дате"""
+    """Keyboard with preset date filters."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=_("date.this_week", language=language), callback_data="date_this_week"),
@@ -224,7 +224,7 @@ def get_date_filter_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboard
     return builder.as_markup()
 
 def get_product_type_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Клавиатура выбора типа продукта"""
+    """Keyboard to select product type."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=_("product.event", language=language), callback_data="type_мероприятие"),
@@ -236,7 +236,7 @@ def get_product_type_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboar
     return builder.as_markup()
 
 def get_edit_fields_keyboard(item_id: int, language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Клавиатура выбора поля для редактирования"""
+    """Keyboard to choose which item field to edit."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=_("fields.name", language=language), callback_data=f"edit_field_name_{item_id}"),
@@ -257,7 +257,7 @@ def get_edit_fields_keyboard(item_id: int, language: str = DEFAULT_LANGUAGE) -> 
     return builder.as_markup()
 
 def get_confirmation_keyboard(action: str, item_id: int = None, language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения действия"""
+    """Keyboard for confirming or cancelling an action."""
     builder = InlineKeyboardBuilder()
     if item_id:
         builder.row(
@@ -272,7 +272,7 @@ def get_confirmation_keyboard(action: str, item_id: int = None, language: str = 
     return builder.as_markup()
 
 def get_sharing_type_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Клавиатура выбора типа шеринга категории"""
+    """Keyboard to choose a category sharing type."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=_("sharing.private", language=language), callback_data="sharing_private")
@@ -290,7 +290,7 @@ def get_category_management_keyboard(
     is_owner: bool = True,
     language: str = DEFAULT_LANGUAGE,
 ) -> InlineKeyboardMarkup:
-    """Клавиатура управления категорией"""
+    """Keyboard with category management actions."""
     builder = InlineKeyboardBuilder()
     
     if is_owner:
@@ -324,7 +324,7 @@ def get_category_management_keyboard(
     return builder.as_markup()
 
 def get_category_sharing_keyboard(category_id: int, language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Клавиатура управления доступом к категории"""
+    """Keyboard exposing access-management actions for a category."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
@@ -353,7 +353,7 @@ def get_category_sharing_keyboard(category_id: int, language: str = DEFAULT_LANG
     return builder.as_markup()
 
 def get_date_input_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Клавиатура для выбора типа ввода даты"""
+    """Keyboard for choosing how to input date values."""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text=_("date.single", language=language), callback_data="date_single"),
@@ -365,11 +365,11 @@ def get_date_input_keyboard(language: str = DEFAULT_LANGUAGE) -> InlineKeyboardM
     return builder.as_markup()
 
 def get_categories_list_keyboard(categories: List, user_id: int, language: str = DEFAULT_LANGUAGE) -> InlineKeyboardMarkup:
-    """Расширенная клавиатура со списком категорий"""
+    """Extended keyboard with a list of categories."""
     builder = InlineKeyboardBuilder()
     
     for category in categories:
-        # Добавляем эмодзи в зависимости от типа доступа
+        # Add emoji based on sharing type
         if category.sharing_type == "private":
             emoji = "🔒"
         elif category.sharing_type == "view_only":
@@ -377,7 +377,7 @@ def get_categories_list_keyboard(categories: List, user_id: int, language: str =
         else:
             emoji = "✍️"
         
-        # Подсчитываем элементы в категории (если есть атрибут items)
+        # Count items when the relationship attribute is present
         items_count = 0
         if hasattr(category, 'items') and category.items:
             items_count = len(category.items)

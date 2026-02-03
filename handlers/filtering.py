@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 @router.message(F.text.in_(get_value_variants("buttons.filter")))
 async def filter_menu(message: Message, user, state: FSMContext):
-    """Главное меню фильтрации"""
     await state.clear()
     language = get_user_language(user)
     msg = await message.answer(
@@ -36,7 +35,6 @@ async def filter_menu(message: Message, user, state: FSMContext):
 
 @router.callback_query(F.data == "filter_category")
 async def filter_by_category(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Фильтрация по категории"""
     try:
         language = get_user_language(user)
         categories = await CategoryCRUD.get_user_categories(session, user.id)
@@ -55,7 +53,6 @@ async def filter_by_category(callback: CallbackQuery, session: AsyncSession, use
 
 @router.callback_query(F.data.startswith("category_"))
 async def apply_category_filter(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Применение фильтра по категории"""
     try:
         language = get_user_language(user)
         category_id = int(callback.data.split("category_")[1])
@@ -78,7 +75,6 @@ async def apply_category_filter(callback: CallbackQuery, session: AsyncSession, 
 
 @router.callback_query(F.data == "filter_tag")
 async def filter_by_tag(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Фильтрация по тегу"""
     try:
         language = get_user_language(user)
         popular_tags = await TagCRUD.get_popular_tags(session, user.id, limit=20)
@@ -97,7 +93,6 @@ async def filter_by_tag(callback: CallbackQuery, session: AsyncSession, user, st
 
 @router.callback_query(F.data.startswith("tag_"))
 async def apply_tag_filter(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Применение фильтра по тегу"""
     try:
         language = get_user_language(user)
         tag_name = callback.data.split("tag_", 1)[1]
@@ -106,7 +101,7 @@ async def apply_tag_filter(callback: CallbackQuery, session: AsyncSession, user,
         await show_filtered_results(
             callback.message,
             items,
-            translate_text(language, f"Tag: #{tag_name}", f"Тег: #{tag_name}"),
+            translate_text(language, f"Tag:
             language
         )
     except Exception as e:
@@ -119,7 +114,6 @@ async def apply_tag_filter(callback: CallbackQuery, session: AsyncSession, user,
 
 @router.callback_query(F.data == "filter_price")
 async def filter_by_price(callback: CallbackQuery, user, state: FSMContext):
-    """Фильтрация по цене"""
     language = get_user_language(user)
     msg = await callback.message.answer(
         translate_text(language, "💸 Choose a price range:", "💸 Выберите диапазон цен:"),
@@ -130,7 +124,6 @@ async def filter_by_price(callback: CallbackQuery, user, state: FSMContext):
 
 @router.callback_query(F.data.startswith("price_"))
 async def apply_price_filter(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Применение фильтра по цене"""
     try:
         language = get_user_language(user)
         price_filter = callback.data
@@ -185,8 +178,6 @@ async def apply_price_filter(callback: CallbackQuery, session: AsyncSession, use
 
 @router.message(FilterStates.price_exact)
 async def process_exact_price_filter(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка точной цены для фильтрации"""
-    # Обработка кнопки "Назад"
     language = get_user_language(user)
     if message.text in get_value_variants("buttons.back"):
         await state.clear()
@@ -222,7 +213,6 @@ async def process_exact_price_filter(message: Message, session: AsyncSession, us
 
 @router.callback_query(F.data == "filter_date")
 async def filter_by_date(callback: CallbackQuery, user, state: FSMContext):
-    """Фильтрация по дате"""
     language = get_user_language(user)
     await callback.message.answer(
         translate_text(language, "📅 Choose a period:", "📅 Выберите период:"),
@@ -232,7 +222,6 @@ async def filter_by_date(callback: CallbackQuery, user, state: FSMContext):
 
 @router.callback_query(F.data == "date_this_week")
 async def filter_this_week(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Фильтрация по текущей неделе"""
     try:
         language = get_user_language(user)
         start_date, end_date = get_week_range()
@@ -254,7 +243,6 @@ async def filter_this_week(callback: CallbackQuery, session: AsyncSession, user,
 
 @router.callback_query(F.data == "date_this_month")
 async def filter_this_month(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Фильтрация по текущему месяцу"""
     try:
         language = get_user_language(user)
         start_date, end_date = get_month_range()
@@ -276,7 +264,6 @@ async def filter_this_month(callback: CallbackQuery, session: AsyncSession, user
 
 @router.callback_query(F.data == "date_custom")
 async def filter_custom_date(callback: CallbackQuery, user, state: FSMContext):
-    """Пользовательская фильтрация по дате"""
     language = get_user_language(user)
     await callback.message.answer(
         translate_text(language, "📅 Enter the start date in DD.MM.YYYY format:", "📅 Введите дату начала в формате ДД.ММ.ГГГГ:"), 
@@ -287,8 +274,6 @@ async def filter_custom_date(callback: CallbackQuery, user, state: FSMContext):
 
 @router.message(FilterStates.date_from)
 async def process_date_from(message: Message, user, state: FSMContext):
-    """Обработка даты начала"""
-    # Обработка кнопки "Назад"
     language = get_user_language(user)
     if message.text in get_value_variants("buttons.back"):
         await state.clear()
@@ -321,8 +306,6 @@ async def process_date_from(message: Message, user, state: FSMContext):
 
 @router.message(FilterStates.date_to)
 async def process_date_to(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка даты окончания"""
-    # Обработка кнопки "Назад"
     language = get_user_language(user)
     if message.text in get_value_variants("buttons.back"):
         await state.set_state(FilterStates.date_from)
@@ -370,7 +353,6 @@ async def process_date_to(message: Message, session: AsyncSession, user, state: 
 
 @router.callback_query(F.data == "filter_location")
 async def filter_by_location(callback: CallbackQuery, user, state: FSMContext):
-    """Фильтрация по местоположению"""
     language = get_user_language(user)
     await callback.message.answer(
         translate_text(language, "📍 Choose a location type:", "📍 Выберите тип местоположения:"),
@@ -380,7 +362,6 @@ async def filter_by_location(callback: CallbackQuery, user, state: FSMContext):
 
 @router.callback_query(F.data.startswith("location_type_"))
 async def filter_by_location_type(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Фильтрация по типу местоположения"""
     try:
         language = get_user_language(user)
         location_type_map = {
@@ -426,7 +407,6 @@ async def filter_by_location_type(callback: CallbackQuery, session: AsyncSession
 
 @router.callback_query(F.data.startswith("location_"))
 async def apply_location_filter(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Применение фильтра по местоположению"""
     try:
         language = get_user_language(user)
         if callback.data == "skip_location":
@@ -456,7 +436,6 @@ async def apply_location_filter(callback: CallbackQuery, session: AsyncSession, 
 
 @router.callback_query(F.data == "filter_type")
 async def filter_by_product_type(callback: CallbackQuery, user, state: FSMContext):
-    """Фильтрация по типу продукта"""
     language = get_user_language(user)
     await callback.message.answer(
         translate_text(language, "🎯 Choose a product type:", "🎯 Выберите тип продукта:"),
@@ -466,7 +445,6 @@ async def filter_by_product_type(callback: CallbackQuery, user, state: FSMContex
 
 @router.callback_query(F.data.startswith("type_"))
 async def apply_product_type_filter(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Применение фильтра по типу продукта"""
     try:
         language = get_user_language(user)
         product_type = callback.data.split("type_")[1]
@@ -489,7 +467,6 @@ async def apply_product_type_filter(callback: CallbackQuery, session: AsyncSessi
 
 @router.callback_query(F.data == "clear_filters")
 async def clear_filters(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Сброс всех фильтров"""
     try:
         language = get_user_language(user)
         await state.clear()
@@ -510,7 +487,6 @@ async def clear_filters(callback: CallbackQuery, session: AsyncSession, user, st
     await callback.answer()
 
 async def show_filtered_results(message: Message, items: list, filter_description: str, language: str):
-    """Показать результаты фильтрации"""
     try:
         if not items:
             m = await message.answer(
@@ -533,7 +509,6 @@ async def show_filtered_results(message: Message, items: list, filter_descriptio
         )
         schedule_delete_message(message.bot, message.chat.id, m1.message_id, delay=15)
         
-        # Показываем первые 10 элементов
         for item in items[:10]:
             try:
                 card_text = format_item_card_sync(item)

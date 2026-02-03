@@ -10,16 +10,13 @@ class ChatCleanerMiddleware(BaseMiddleware):
         event: Union[Message, CallbackQuery],
         data: Dict[str, Any]
     ) -> Any:
-        # Обрабатываем событие
         result = await handler(event, data)
         
-        # Если это текстовое сообщение пользователя
         if isinstance(event, Message) and event.text and not event.text.startswith('/'):
             try:
-                # Удаляем сообщение пользователя через 3 секунды
                 await asyncio.sleep(3)
                 await event.delete()
             except Exception:
-                pass  # Игнорируем ошибки удаления
+                pass
         
         return result

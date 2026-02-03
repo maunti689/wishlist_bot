@@ -22,7 +22,6 @@ class BackButtonMiddleware(BaseMiddleware):
             
             logger.info(f"Нажата кнопка 'Назад' в состоянии: {current_state}")
             
-            # Удаляем временные сообщения, затем очищаем состояние
             try:
                 await cleanup_ephemeral_messages(event.bot, state, event.chat.id)
             except Exception:
@@ -32,7 +31,6 @@ class BackButtonMiddleware(BaseMiddleware):
             user = data.get("user")
             language = get_user_language(user)
 
-            # Возвращаемся в главное меню
             await event.answer(
                 translate_text(language, "🏠 Main menu", "🏠 Главное меню"),
                 reply_markup=get_main_keyboard(language=language)

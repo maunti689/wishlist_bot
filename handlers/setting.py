@@ -8,6 +8,7 @@ from keyboards import get_main_keyboard
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import logging
 
+from utils.helpers import escape_markdown
 from utils.localization import (
     translate as _,
     translate_text,
@@ -25,6 +26,7 @@ def build_settings_view(current_user, language: str):
     full_name = " ".join(filter(None, [current_user.first_name, current_user.last_name]))
     if not full_name:
         full_name = translate_text(language, "No name", "Без имени")
+    full_name = escape_markdown(full_name)
 
     notifications_status = translate_text(language, "Enabled", "Включены") if current_user.notifications_enabled else translate_text(language, "Disabled", "Отключены")
     notifications_icon = "🔔" if current_user.notifications_enabled else "🔕"
@@ -69,15 +71,12 @@ def build_settings_view(current_user, language: str):
 
 @router.message(F.text.in_(get_value_variants("buttons.settings")))
 async def settings_menu(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Главное меню настроек"""
     await state.clear()
     
     try:
-        # Используем правильный метод CRUD
         current_user = await UserCRUD.get_user_by_telegram_id(session, message.from_user.id)
         
         if not current_user:
-            # Создаем пользователя, если его нет
             current_user = await UserCRUD.get_or_create_user(
                 session, 
                 message.from_user.id,
@@ -107,7 +106,6 @@ async def settings_menu(message: Message, session: AsyncSession, user, state: FS
 
 @router.callback_query(F.data == "toggle_notifications")
 async def toggle_notifications(callback: CallbackQuery, session: AsyncSession, user):
-    """Переключение уведомлений"""
     try:
         current_user = await UserCRUD.get_user_by_telegram_id(session, callback.from_user.id)
         
@@ -117,7 +115,6 @@ async def toggle_notifications(callback: CallbackQuery, session: AsyncSession, u
 
         new_state = not current_user.notifications_enabled
         
-        # Используем правильный метод CRUD
         await UserCRUD.update_user_notifications(session, current_user.id, new_state)
         
         language = get_user_language(current_user)

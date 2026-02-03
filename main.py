@@ -6,27 +6,24 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, LOG_LEVEL, USE_PID_LOCK
+from utils.redis_client import ensure_redis_connection, close_redis_connection
 from database.models import init_db
 from handlers import start, add_item, add_category, view_list, filtering, admin, categories
 from handlers import setting, access_codes
-# from handlers import errors  # Создать если нужен отдельный файл с обработчиками ошибок
 
 from middlewares.db import DatabaseMiddleware
 from middlewares.back_button import BackButtonMiddleware
 from middlewares.chat_cleaner import ChatCleanerMiddleware
-# from middlewares.antispam import AntiSpamMiddleware  # Создать если нужно
 from utils.notifications import NotificationScheduler
 
-# Настройка логирования
+# Logging setup
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('bot.log', encoding='utf-8')
-    ]
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
 
@@ -35,18 +32,18 @@ LOCK_FILE = 'bot.pid'
 def acquire_lock() -> bool:
     try:
         if os.path.exists(LOCK_FILE):
-            # Файл существует — проверим, жив ли процесс
+            # Lock file exists — check if the process is alive
             try:
                 with open(LOCK_FILE, 'r') as f:
                     pid = int(f.read().strip() or '0')
                 if pid > 0:
-                    # Если процесс жив, выходим
+                    # Exit if another process is running
                     try:
                         os.kill(pid, 0)
                         logger.error("Найден запущенный экземпляр (pid=%s). Выход.", pid)
                         return False
                     except OSError:
-                        # Пид-файл устарел
+                        # Lock file is stale
                         pass
             except Exception:
                 pass
@@ -55,7 +52,7 @@ def acquire_lock() -> bool:
         return True
     except Exception as e:
         logger.error("Не удалось создать lock-файл: %s", e)
-        return True  # Не блокируем запуск, если что-то пошло не так
+        return True  # Do not block launch if lock file cannot be created
 
 def release_lock():
     try:
@@ -64,20 +61,31 @@ def release_lock():
     except Exception:
         pass
 
-async def run_bot() -> None:
-    """Создает экземпляры бота/диспетчера и запускает polling."""
-    async with Bot(token=BOT_TOKEN) as bot:
-        dp = Dispatcher(storage=MemoryStorage())
+async def _init_storage():
+    try:
+        redis = await ensure_redis_connection()
+        logger.info("Redis FSM storage инициализирован")
+        return RedisStorage(redis=redis), True
+    except Exception as exc:
+        logger.warning("Redis недоступен (%s). Используем MemoryStorage.", exc)
+        return MemoryStorage(), False
 
-        # Подключение middleware
+
+async def run_bot() -> None:
+    """Create bot/dispatcher instances and start polling."""
+    storage, uses_redis = await _init_storage()
+    async with Bot(token=BOT_TOKEN) as bot:
+        dp = Dispatcher(storage=storage)
+
+        # Middleware registration
         db_middleware = DatabaseMiddleware()
         dp.message.middleware(db_middleware)
         dp.callback_query.middleware(db_middleware)
         dp.message.middleware(BackButtonMiddleware())
         dp.message.middleware(ChatCleanerMiddleware())
 
-        # Регистрация роутеров (порядок важен!)
-        dp.include_router(start.router)  # Должен быть первым для обработки /start
+        # Router registration (order matters)
+        dp.include_router(start.router)  # Must be first to handle /start
         dp.include_router(access_codes.router)
         dp.include_router(add_item.router)
         dp.include_router(add_category.router)
@@ -85,9 +93,9 @@ async def run_bot() -> None:
         dp.include_router(view_list.router)
         dp.include_router(filtering.router)
         dp.include_router(setting.router)
-        dp.include_router(admin.router)  # Должен быть последним
+        dp.include_router(admin.router)  # Keep last for admin-only handlers
 
-        # Глобальный обработчик ошибок
+        # Global error handler
         @dp.errors()
         async def error_handler(event, **kwargs):
             logger.exception("Необработанная ошибка: %s", event.exception)
@@ -110,7 +118,7 @@ async def run_bot() -> None:
 
             return True
 
-        # Запуск планировщика уведомлений и сохранение таска, чтобы его корректно остановить
+        # Start notification scheduler and keep the task for graceful shutdown
         notification_scheduler = NotificationScheduler(bot)
         scheduler_task = asyncio.create_task(notification_scheduler.start())
 
@@ -118,20 +126,26 @@ async def run_bot() -> None:
         try:
             await dp.start_polling(bot)
         finally:
-            # Останавливаем планировщик и дожидаемся завершения таска
+            # Stop scheduler and wait for the task to finish
             await notification_scheduler.stop()
             scheduler_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await scheduler_task
+            await storage.close()
+            if uses_redis:
+                await close_redis_connection()
 
 
 async def main():
-    # Guard от второго экземпляра
-    if not acquire_lock():
-        sys.exit(1)
+    # Guard against running multiple instances when requested
+    lock_acquired = False
+    if USE_PID_LOCK:
+        lock_acquired = acquire_lock()
+        if not lock_acquired:
+            sys.exit(1)
 
     try:
-        # Инициализация базы данных
+        # Initialize database
         logger.info("Инициализация базы данных...")
         await init_db()
 
@@ -139,7 +153,7 @@ async def main():
         while True:
             try:
                 await run_bot()
-                break  # Корректное завершение polling — выходим
+                break  # Exit once polling finishes gracefully
             except TelegramNetworkError as e:
                 logger.error(
                     "Проблема с подключением к Telegram (%s). Перезапуск через %s секунд...",
@@ -151,7 +165,8 @@ async def main():
                 logger.exception(f"Критическая ошибка при запуске бота: {e}")
                 break
     finally:
-        release_lock()
+        if USE_PID_LOCK and lock_acquired:
+            release_lock()
         logger.info("Бот остановлен")
 
 if __name__ == "__main__":

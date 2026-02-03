@@ -6,7 +6,7 @@ from database.crud import UserCRUD
 
 
 class DatabaseMiddleware(BaseMiddleware):
-    """Middleware для подключения сессии БД и загрузки пользователя"""
+    """Attach DB session and ensure the user object is available."""
 
     async def __call__(
         self,
@@ -14,13 +14,13 @@ class DatabaseMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any]
     ) -> Any:
-        # создаём асинхронную сессию через контекстный менеджер
+        # Create async session via context manager
         async with AsyncSessionLocal() as session:
             try:
-                # добавляем сессию в data
+                # Expose session to downstream handlers
                 data["session"] = session
 
-                # если событие пришло от пользователя
+                # When event is from a user, load their profile
                 if hasattr(event, 'from_user') and event.from_user:
                     user = await UserCRUD.get_or_create_user(
                         session=session,
@@ -31,10 +31,10 @@ class DatabaseMiddleware(BaseMiddleware):
                     )
                     data["user"] = user
 
-                # передаём управление следующему обработчику
+                # Proceed with the next handler in the chain
                 return await handler(event, data)
 
             except Exception as e:
-                # в случае ошибки — откатываем изменения
+                # Roll back on errors so the session stays clean
                 await session.rollback()
                 raise e

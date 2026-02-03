@@ -1,10 +1,10 @@
 from aiogram.fsm.state import State, StatesGroup
 
 class AddItemStates(StatesGroup):
-    """Состояния для добавления элемента"""
+    """States used during the add-item flow."""
     name = State()
     category = State()
-    select_field = State()  # Новое состояние для выбора полей
+    select_field = State()  # State for selecting which field to fill next
     tags = State()
     add_new_tag = State()
     price = State()
@@ -20,25 +20,25 @@ class AddItemStates(StatesGroup):
     photo = State()
 
 class AddCategoryStates(StatesGroup):
-    """Состояния для добавления категории"""
+    """States for creating a new category."""
     name = State()
     sharing_type = State()
 
 class ManageCategoryStates(StatesGroup):
-    """Состояния для управления категориями"""
+    """States for category management flows."""
     rename = State()
     change_sharing_type = State()
     add_user_by_id = State()
-    enter_access_code = State()  # Новое состояние для ввода кода
+    enter_access_code = State()  # State when user types in an access code
 
 class FilterStates(StatesGroup):
-    """Состояния для фильтрации"""
+    """States used in filtering dialogues."""
     price_exact = State()
     date_from = State()
     date_to = State()
 
 class EditItemStates(StatesGroup):
-    """Состояния для редактирования элемента"""
+    """States for editing individual item fields."""
     name = State()
     tags = State()
     add_new_tag = State()

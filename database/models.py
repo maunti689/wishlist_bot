@@ -32,7 +32,6 @@ class User(Base):
     notifications_enabled = Column(Boolean, default=True)
     language = Column(String(5), default="en", nullable=False)
     
-    # Связи
     categories = relationship("Category", back_populates="owner")
     items = relationship("Item", back_populates="owner")
     shared_categories = relationship("SharedCategory", back_populates="user")
@@ -48,9 +47,8 @@ class Category(Base):
     sharing_type = Column(String(20), default="private")  # private, view_only, collaborative
     share_link = Column(String(100), unique=True, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    date = Column(DateTime, nullable=True)  # Дата категории для напоминаний
+    date = Column(DateTime, nullable=True)
     
-    # Связи
     owner = relationship("User", back_populates="categories")
     items = relationship("Item", back_populates="category")
     shared_users = relationship("SharedCategory", back_populates="category")
@@ -62,23 +60,22 @@ class Item(Base):
     name = Column(String(200), nullable=False)
     category_id = Column(Integer, ForeignKey("categories.id"))
     owner_id = Column(Integer, ForeignKey("users.id"))
-    location_id = Column(Integer, ForeignKey("locations.id"), nullable=True)  # Связь с местоположением
-    tags = Column(Text)  # JSON строка с тегами
+    location_id = Column(Integer, ForeignKey("locations.id"), nullable=True)
+    tags = Column(Text)
     price = Column(Float, nullable=True)
-    location_type = Column(String(50), nullable=True)  # в городе, за городом, по району
+    location_type = Column(String(50), nullable=True)
     location_value = Column(String(200), nullable=True)
-    date = Column(DateTime, nullable=True)  # Старое поле для совместимости
-    date_from = Column(DateTime, nullable=True)  # Дата начала (или единственная дата)
-    date_to = Column(DateTime, nullable=True)    # Дата окончания (для диапазонов)
+    date = Column(DateTime, nullable=True)
+    date_from = Column(DateTime, nullable=True)
+    date_to = Column(DateTime, nullable=True)
     url = Column(Text, nullable=True)
     comment = Column(Text, nullable=True)
     photo_file_id = Column(String(200), nullable=True)
-    product_type = Column(String(50), default="вещь")  # мероприятие, кафе/ресторан, вещь
+    product_type = Column(String(50), default="вещь")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     notifications_enabled = Column(Boolean, default=True)
     
-    # Связи
     category = relationship("Category", back_populates="items")
     owner = relationship("User", back_populates="items")
     location = relationship("Location")
@@ -92,9 +89,12 @@ class SharedCategory(Base):
     can_edit = Column(Boolean, default=False)
     shared_at = Column(DateTime, default=datetime.utcnow)
     
-    # Связи
     category = relationship("Category", back_populates="shared_users")
     user = relationship("User", back_populates="shared_categories")
+
+    __table_args__ = (
+        UniqueConstraint('category_id', 'user_id', name='uix_shared_category_user'),
+    )
 
 class Tag(Base):
     __tablename__ = "tags"
@@ -115,7 +115,7 @@ class Location(Base):
     __tablename__ = "locations"
     
     id = Column(Integer, primary_key=True)
-    location_type = Column(String(50), nullable=False)  # в городе, за городом, по району
+    location_type = Column(String(50), nullable=False)
     name = Column(String(200), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     usage_count = Column(Integer, default=1)
@@ -127,18 +127,15 @@ class Location(Base):
         UniqueConstraint('location_type', 'name', 'user_id', name='uix_location_type_name_user'),
     )
 
-# Создание движка и сессий
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 async def init_db():
-    """Инициализация базы данных"""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(ensure_language_column)
 
 async def get_session():
-    """Получение сессии базы данных"""
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -146,7 +143,6 @@ async def get_session():
             await session.close()
 
 def ensure_language_column(connection):
-    """Добавляет колонку language в users, если она отсутствует."""
     inspector = inspect(connection)
     columns = [col['name'] for col in inspector.get_columns('users')]
     if 'language' not in columns:

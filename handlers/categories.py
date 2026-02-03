@@ -2,10 +2,6 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
-import uuid
-import hashlib
-import random
-import string
 import logging
 
 from database.crud import CategoryCRUD, ItemCRUD, UserCRUD
@@ -16,17 +12,17 @@ from keyboards import (
     get_category_management_keyboard, get_category_sharing_keyboard,
     get_sharing_type_keyboard, get_confirmation_keyboard
 )
-from utils.helpers import format_item_card
+from utils.helpers import format_item_card, escape_markdown
 from utils.cleanup import schedule_delete_message
 from utils.notifications import send_category_shared_notification, send_category_access_revoked_notification
 from utils.localization import translate as _, translate_text, get_user_language, get_value_variants
 
 router = Router()
+BACK_BUTTONS = get_value_variants("buttons.back")
 logger = logging.getLogger(__name__)
 
 @router.message(F.text.in_(get_value_variants("buttons.manage_categories")))
 async def manage_categories_menu(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Главное меню управления категориями"""
     await state.clear()
     
     try:
@@ -61,7 +57,6 @@ async def manage_categories_menu(message: Message, session: AsyncSession, user, 
 
 @router.callback_query(F.data.startswith("category_menu_"))
 async def category_menu(callback: CallbackQuery, session: AsyncSession, user):
-    """Меню конкретной категории"""
     try:
         language = get_user_language(user)
         category_id = int(callback.data.split("category_menu_")[1])
@@ -72,14 +67,11 @@ async def category_menu(callback: CallbackQuery, session: AsyncSession, user):
             await callback.answer(translate_text(language, "❌ Category not found", "❌ Категория не найдена"))
             return
         
-        # Проверяем права доступа
         is_owner = category.owner_id == user.id
         
-        # Получаем количество элементов
         items = await ItemCRUD.get_items_by_category(session, category_id)
         items_count = len(items)
         
-        # Определяем тип доступа
         sharing_emoji = {
             "private": _("sharing.private", language=language),
             "view_only": _("sharing.view_only", language=language), 
@@ -89,20 +81,21 @@ async def category_menu(callback: CallbackQuery, session: AsyncSession, user):
         sharing_text = sharing_emoji.get(category.sharing_type, _("sharing.private", language=language))
         owner_text = translate_text(language, "You", "Вы") if is_owner else translate_text(language, "Another user", "Другой пользователь")
         
+        safe_category_name = escape_markdown(category.name)
         text = translate_text(
             language,
-            f"📂 **{category.name}**\n\n"
+            f"📂 **{safe_category_name}**\n\n"
             f"🎯 Items: {items_count}\n"
             f"👤 Owner: {owner_text}\n"
             f"🔐 Access: {sharing_text}\n",
-            f"📂 **{category.name}**\n\n"
+            f"📂 **{safe_category_name}**\n\n"
             f"🎯 Элементов: {items_count}\n"
             f"👤 Владелец: {owner_text}\n"
             f"🔐 Тип доступа: {sharing_text}\n"
         )
         
         if category.sharing_type != "private":
-            code = generate_access_code(category.id)
+            code = category.share_link or await CategoryCRUD.ensure_share_code(session, category.id)
             text += translate_text(language, f"🔑 Access code: `{code}`\n", f"🔑 Код доступа: `{code}`\n")
         
         m = await callback.message.answer(
@@ -110,7 +103,6 @@ async def category_menu(callback: CallbackQuery, session: AsyncSession, user):
             reply_markup=get_category_management_keyboard(category_id, is_owner, language=language),
             parse_mode="Markdown"
         )
-        # Это меню управления категорией можно оставить, поэтому без авто-удаления
         
     except Exception as e:
         logger.error(f"Ошибка в category_menu: {e}")
@@ -120,7 +112,6 @@ async def category_menu(callback: CallbackQuery, session: AsyncSession, user):
 
 @router.callback_query(F.data.startswith("category_sharing_"))
 async def category_sharing_menu(callback: CallbackQuery, session: AsyncSession, user):
-    """Меню настроек доступа к категории"""
     try:
         language = get_user_language(user)
         category_id = int(callback.data.split("category_sharing_")[1])
@@ -133,7 +124,6 @@ async def category_sharing_menu(callback: CallbackQuery, session: AsyncSession, 
             )
             return
         
-        # Получаем список пользователей с доступом
         shared_users_count = await CategoryCRUD.get_shared_users_count(session, category_id)
         
         sharing_text = {
@@ -154,20 +144,21 @@ async def category_sharing_menu(callback: CallbackQuery, session: AsyncSession, 
             )
         }
 
+        safe_category_name = escape_markdown(category.name)
         text = translate_text(
             language,
             f"👥 Access management\n"
-            f"📂 Category: **{category.name}**\n\n"
+            f"📂 Category: **{safe_category_name}**\n\n"
             f"Current type: {sharing_text.get(category.sharing_type, 'Unknown')}\n\n"
             f"👥 Users with access: {shared_users_count}\n",
             f"👥 Управление доступом\n"
-            f"📂 Категория: **{category.name}**\n\n"
+            f"📂 Категория: **{safe_category_name}**\n\n"
             f"Текущий тип: {sharing_text.get(category.sharing_type, 'Неизвестный')}\n\n"
             f"👥 Пользователей с доступом: {shared_users_count}\n"
         )
         
         if category.sharing_type != "private":
-            code = generate_access_code(category.id)
+            code = category.share_link or await CategoryCRUD.ensure_share_code(session, category.id)
             text += translate_text(language, f"\n🔑 Access code: `{code}`\n", f"\n🔑 Код для доступа: `{code}`\n")
             text += translate_text(language, "Share it with people who need access.", "Отправьте этот код тем, кому хотите дать доступ.")
         
@@ -186,7 +177,6 @@ async def category_sharing_menu(callback: CallbackQuery, session: AsyncSession, 
 
 @router.callback_query(F.data.startswith("change_sharing_type_"))
 async def change_sharing_type(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Изменение типа доступа к категории"""
     try:
         language = get_user_language(user)
         category_id = int(callback.data.split("change_sharing_type_")[1])
@@ -207,7 +197,6 @@ async def change_sharing_type(callback: CallbackQuery, session: AsyncSession, us
 
 @router.callback_query(F.data.startswith("sharing_"), ManageCategoryStates.change_sharing_type)
 async def process_sharing_type_change(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
-    """Обработка изменения типа доступа"""
     try:
         sharing_type = callback.data.split("sharing_")[1]
         
@@ -218,34 +207,26 @@ async def process_sharing_type_change(callback: CallbackQuery, session: AsyncSes
             await callback.answer("❌ Ошибка: категория не найдена")
             return
         
-        # Узнаём текущий тип доступа
         category = await CategoryCRUD.get_category_by_id(session, category_id)
         if not category:
             await callback.answer("❌ Категория не найдена")
             return
         old_type = category.sharing_type
 
-        # Генерируем share_link для любого типа кроме private
-        share_link = None
+        share_code = None
         if sharing_type in ["view_only", "collaborative"]:
-            share_link = generate_share_link(category_id)
+            share_code = category.share_link or await CategoryCRUD.generate_unique_share_code(session)
+        await CategoryCRUD.update_category_sharing(session, category_id, sharing_type, share_code)
         
-        await CategoryCRUD.update_category_sharing(session, category_id, sharing_type, share_link)
-        
-        # Уведомить при смене доступа: если было shared и стало private -> всем сообщить об отзыве и убрать доступ
-        # Если стало shared -> уведомлять при раздаче доступа через код (уже реализовано в access_codes/join_shared)
         if old_type in ["view_only", "collaborative"] and sharing_type == "private":
             from sqlalchemy import select
             from database.models import AsyncSessionLocal, User, SharedCategory
-            # Сначала соберём список пользователей для уведомления
             async with AsyncSessionLocal() as s:
                 result = await s.execute(select(User).where(User.id.in_(
                     select(SharedCategory.user_id).where(SharedCategory.category_id == category_id)
                 )))
                 users = list(result.scalars().all())
-            # Удалим доступы
             await CategoryCRUD.revoke_all_shares(session, category_id)
-            # Отправим уведомления
             for u in users:
                 await send_category_access_revoked_notification(callback.bot, category, callback.from_user, u)
         
@@ -257,9 +238,8 @@ async def process_sharing_type_change(callback: CallbackQuery, session: AsyncSes
         
         text = f"✅ Тип доступа изменен на: {sharing_names.get(sharing_type)}"
         
-        if sharing_type != "private":
-            code = generate_access_code(category_id)
-            text += f"\n\n🔑 Код для доступа:\n`{code}`\n\nДайте этот код тем, кому хотите предоставить доступ к категории."
+        if sharing_type != "private" and share_code:
+            text += f"\n\n🔑 Код для доступа:\n`{share_code}`\n\nДайте этот код тем, кому хотите предоставить доступ к категории."
         
         m = await callback.message.answer(text, parse_mode="Markdown")
         schedule_delete_message(callback.bot, callback.message.chat.id, m.message_id, delay=20)
@@ -274,7 +254,6 @@ async def process_sharing_type_change(callback: CallbackQuery, session: AsyncSes
 
 @router.callback_query(F.data.startswith("get_share_link_"))
 async def get_share_code(callback: CallbackQuery, session: AsyncSession):
-    """Получение кода для доступа к категории"""
     try:
         category_id = int(callback.data.split("get_share_link_")[1])
         
@@ -289,11 +268,12 @@ async def get_share_code(callback: CallbackQuery, session: AsyncSession):
             return
         
         access_type = "просмотра" if category.sharing_type == "view_only" else "редактирования"
-        code = generate_access_code(category_id)
+        code = category.share_link or await CategoryCRUD.ensure_share_code(session, category_id)
         
+        safe_category_name = escape_markdown(category.name)
         text = (
             f"🔑 **Код для доступа к категории**\n"
-            f"📂 {category.name}\n\n"
+            f"📂 {safe_category_name}\n\n"
             f"Код для {access_type}:\n"
             f"`{code}`\n\n"
             f"📋 Инструкция:\n"
@@ -314,7 +294,6 @@ async def get_share_code(callback: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("category_stats_"))
 async def category_stats(callback: CallbackQuery, session: AsyncSession):
-    """Статистика категории"""
     try:
         category_id = int(callback.data.split("category_stats_")[1])
         
@@ -325,7 +304,6 @@ async def category_stats(callback: CallbackQuery, session: AsyncSession):
             await callback.answer("❌ Категория не найдена")
             return
         
-        # Собираем статистику
         total_items = len(items)
         items_with_price = len([item for item in items if item.price])
         items_with_date = len([item for item in items if item.date_from or item.date])
@@ -334,7 +312,6 @@ async def category_stats(callback: CallbackQuery, session: AsyncSession):
         total_value = sum(item.price for item in items if item.price)
         avg_price = total_value / items_with_price if items_with_price > 0 else 0
         
-        # Собираем теги
         all_tags = []
         for item in items:
             if item.tags:
@@ -347,9 +324,10 @@ async def category_stats(callback: CallbackQuery, session: AsyncSession):
         
         unique_tags = len(set(all_tags))
         
+        safe_category_name = escape_markdown(category.name)
         text = (
             f"📊 **Статистика категории**\n"
-            f"📂 {category.name}\n\n"
+            f"📂 {safe_category_name}\n\n"
             f"🎯 Всего элементов: {total_items}\n"
             f"💸 С указанной ценой: {items_with_price}\n"
             f"📅 С датами: {items_with_date}\n"
@@ -374,7 +352,6 @@ async def category_stats(callback: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("category_rename_"))
 async def category_rename_start(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
-    """Начало переименования категории"""
     try:
         category_id = int(callback.data.split("category_rename_")[1])
         
@@ -386,9 +363,10 @@ async def category_rename_start(callback: CallbackQuery, session: AsyncSession, 
         
         await state.update_data(category_id=category_id)
         
+        safe_category_name = escape_markdown(category.name)
         m = await callback.message.answer(
             f"✏️ Переименование категории\n"
-            f"Текущее название: **{category.name}**\n\n"
+            f"Текущее название: **{safe_category_name}**\n\n"
             f"Введите новое название:",
             reply_markup=get_back_keyboard(),
             parse_mode="Markdown"
@@ -404,8 +382,7 @@ async def category_rename_start(callback: CallbackQuery, session: AsyncSession, 
 
 @router.message(ManageCategoryStates.rename)
 async def process_category_rename(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка переименования категории"""
-    if message.text == "◀️ Назад":
+    if message.text in BACK_BUTTONS:
         await state.clear()
         await message.answer(
             "🏠 Главное меню",
@@ -431,7 +408,6 @@ async def process_category_rename(message: Message, session: AsyncSession, user,
         
         new_name = message.text.strip()
         
-        # Валидация названия
         if len(new_name) > 100:
             await message.answer("❌ Название слишком длинное (максимум 100 символов). Попробуйте еще раз:")
             return
@@ -440,7 +416,6 @@ async def process_category_rename(message: Message, session: AsyncSession, user,
             await message.answer("❌ Название слишком короткое (минимум 2 символа). Попробуйте еще раз:")
             return
         
-        # Проверяем, нет ли уже такой категории у пользователя
         user_categories = await CategoryCRUD.get_user_categories(session, user.id)
         own_categories = [cat for cat in user_categories if cat.owner_id == user.id]
         existing_names = [cat.name.lower() for cat in own_categories if cat.id != category_id]
@@ -451,12 +426,12 @@ async def process_category_rename(message: Message, session: AsyncSession, user,
                 f"Введите другое название:"
             )
             return
-        
+
         await CategoryCRUD.update_category_name(session, category_id, new_name)
         await state.clear()
-        
+
         m = await message.answer(
-            f"✅ Категория переименована в: **{new_name}**",
+            f"✅ Категория переименована в: **{escape_markdown(new_name)}**",
             reply_markup=get_main_keyboard(),
             parse_mode="Markdown"
         )
@@ -472,7 +447,6 @@ async def process_category_rename(message: Message, session: AsyncSession, user,
 
 @router.callback_query(F.data.startswith("category_delete_"))
 async def category_delete_confirm(callback: CallbackQuery, session: AsyncSession):
-    """Подтверждение удаления категории"""
     try:
         category_id = int(callback.data.split("category_delete_")[1])
         
@@ -499,7 +473,6 @@ async def category_delete_confirm(callback: CallbackQuery, session: AsyncSession
 
 @router.callback_query(F.data.startswith("confirm_delete_category_"))
 async def confirm_delete_category(callback: CallbackQuery, session: AsyncSession):
-    """Подтверждение удаления категории"""
     try:
         category_id = int(callback.data.split("confirm_delete_category_")[1])
         
@@ -511,12 +484,10 @@ async def confirm_delete_category(callback: CallbackQuery, session: AsyncSession
         
         category_name = category.name
         
-        # Удаляем все элементы в категории
         items = await ItemCRUD.get_items_by_category(session, category_id)
         for item in items:
             await ItemCRUD.delete_item(session, item.id)
         
-        # Удаляем категорию
         await CategoryCRUD.delete_category(session, category_id)
         
         await callback.message.edit_text(f"✅ Категория '{category_name}' удалена!")
@@ -529,13 +500,11 @@ async def confirm_delete_category(callback: CallbackQuery, session: AsyncSession
 
 @router.callback_query(F.data.startswith("cancel_delete_category_"))
 async def cancel_delete_category(callback: CallbackQuery):
-    """Отмена удаления категории"""
     await callback.message.edit_text("❌ Удаление отменено")
     await callback.answer()
 
 @router.callback_query(F.data == "back_to_main")
 async def back_to_main_menu(callback: CallbackQuery):
-    """Возврат в главное меню"""
     await callback.message.answer(
         "🏠 Главное меню",
         reply_markup=get_main_keyboard()
@@ -544,7 +513,6 @@ async def back_to_main_menu(callback: CallbackQuery):
 
 @router.callback_query(F.data == "back_to_categories")
 async def back_to_categories(callback: CallbackQuery, session: AsyncSession, user):
-    """Возврат к списку категорий"""
     try:
         categories = await CategoryCRUD.get_user_categories(session, user.id)
         
@@ -562,15 +530,3 @@ async def back_to_categories(callback: CallbackQuery, session: AsyncSession, use
         )
     
     await callback.answer()
-
-# Вспомогательные функции
-def generate_share_link(category_id: int) -> str:
-    """Генерация ссылки для доступа к категории"""
-    random_part = str(uuid.uuid4())[:8]
-    return f"share_{category_id}_{random_part}"
-
-def generate_access_code(category_id: int) -> str:
-    """Генерация кода доступа (6-значный)"""
-    # Создаем 6-значный код на основе ID категории и случайного числа
-    random_num = random.randint(100000, 999999)
-    return f"{category_id:03d}{random_num % 1000:03d}"

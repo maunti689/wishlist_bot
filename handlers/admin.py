@@ -12,14 +12,17 @@ from keyboards import (
     get_date_input_keyboard
 )
 from utils.helpers import (
-    parse_tags, validate_price, parse_date, format_item_card
+    parse_tags, validate_price, parse_date, format_item_card, escape_markdown
 )
 from utils.notifications import send_item_updated_notification
 from utils.cleanup import add_ephemeral_message, cleanup_ephemeral_messages, schedule_delete_message
+from utils.localization import get_value_variants
 
 router = Router()
 
-# Проверка прав редактирования категории
+BACK_BUTTONS = get_value_variants("buttons.back")
+SKIP_BUTTONS = get_value_variants("buttons.skip")
+
 async def _can_edit(session: AsyncSession, category_id: int, user) -> bool:
     category = await CategoryCRUD.get_category_by_id(session, category_id)
     if not category:
@@ -29,11 +32,8 @@ async def _can_edit(session: AsyncSession, category_id: int, user) -> bool:
     shared = await CategoryCRUD.check_user_access(session, category_id, user.id)
     return bool(shared and getattr(shared, 'can_edit', False))
 
-# Редактирование полей элемента
-
 @router.callback_query(F.data.startswith("edit_field_name_"))
 async def edit_item_name(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Редактирование названия элемента"""
     item_id = int(callback.data.split("edit_field_name_")[1])
     
     item = await ItemCRUD.get_item_by_id(session, item_id)
@@ -41,15 +41,15 @@ async def edit_item_name(callback: CallbackQuery, session: AsyncSession, user, s
         await callback.answer("❌ Элемент не найден")
         return
     
-    # Проверка прав
     if not await _can_edit(session, item.category_id, user):
         await callback.answer("❌ Нет прав на редактирование", show_alert=True)
         return
     await state.update_data(editing_item_id=item_id, editing_field="name")
     
+    safe_name = escape_markdown(item.name) if item.name else "—"
     msg = await callback.message.answer(
         f"✏️ Редактирование названия элемента\n"
-        f"Текущее название: **{item.name}**\n\n"
+        f"Текущее название: **{safe_name}**\n\n"
         f"Введите новое название:",
         reply_markup=get_back_keyboard(),
         parse_mode="Markdown"
@@ -60,7 +60,6 @@ async def edit_item_name(callback: CallbackQuery, session: AsyncSession, user, s
 
 @router.message(EditItemStates.name)
 async def process_edit_name(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка нового названия"""
     if not message.text or message.text.strip() == "":
         await message.answer("❌ Название не может быть пустым. Попробуйте еще раз:")
         return
@@ -68,17 +67,16 @@ async def process_edit_name(message: Message, session: AsyncSession, user, state
     data = await state.get_data()
     item_id = data.get('editing_item_id')
     
-    await ItemCRUD.update_item(session, item_id, name=message.text.strip())
-    # Уведомление об изменении
+    new_name_plain = message.text.strip()
+    await ItemCRUD.update_item(session, item_id, name=new_name_plain)
     item = await ItemCRUD.get_item_by_id(session, item_id)
     category = await CategoryCRUD.get_category_by_id(session, item.category_id)
     await send_item_updated_notification(message.bot, category, item, user, "edit")
     
-    # Удаляем временные сообщения, очищаем состояние
     await cleanup_ephemeral_messages(message.bot, state, message.chat.id)
     await state.clear()
     ok = await message.answer(
-        f"✅ Название элемента обновлено на: **{message.text.strip()}**",
+        f"✅ Название элемента обновлено на: **{escape_markdown(new_name_plain)}**",
         reply_markup=get_main_keyboard(),
         parse_mode="Markdown"
     )
@@ -86,7 +84,6 @@ async def process_edit_name(message: Message, session: AsyncSession, user, state
 
 @router.callback_query(F.data.startswith("edit_field_price_"))
 async def edit_item_price(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Редактирование цены элемента"""
     item_id = int(callback.data.split("edit_field_price_")[1])
     
     item = await ItemCRUD.get_item_by_id(session, item_id)
@@ -94,7 +91,6 @@ async def edit_item_price(callback: CallbackQuery, session: AsyncSession, user, 
         await callback.answer("❌ Элемент не найден")
         return
     
-    # Проверка прав
     if not await _can_edit(session, item.category_id, user):
         await callback.answer("❌ Нет прав на редактирование", show_alert=True)
         return
@@ -115,8 +111,7 @@ async def edit_item_price(callback: CallbackQuery, session: AsyncSession, user, 
 
 @router.message(EditItemStates.price)
 async def process_edit_price(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка новой цены"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         data = await state.get_data()
         item_id = data.get('editing_item_id')
         
@@ -160,7 +155,6 @@ async def process_edit_price(message: Message, session: AsyncSession, user, stat
 
 @router.callback_query(F.data.startswith("edit_field_date_"))
 async def edit_item_date(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Редактирование даты элемента"""
     item_id = int(callback.data.split("edit_field_date_")[1])
     
     item = await ItemCRUD.get_item_by_id(session, item_id)
@@ -168,20 +162,18 @@ async def edit_item_date(callback: CallbackQuery, session: AsyncSession, user, s
         await callback.answer("❌ Элемент не найден")
         return
     
-    # Проверка прав
     if not await _can_edit(session, item.category_id, user):
         await callback.answer("❌ Нет прав на редактирование", show_alert=True)
         return
     await state.update_data(editing_item_id=item_id, editing_field="date")
     
-    # Определяем текущую дату/диапазон
     current_date_text = "не указана"
     if item.date_from:
         if item.date_to and item.date_to != item.date_from:
             current_date_text = f"{item.date_from.strftime('%d.%m.%Y')} - {item.date_to.strftime('%d.%m.%Y')}"
         else:
             current_date_text = item.date_from.strftime('%d.%m.%Y')
-    elif item.date:  # Совместимость со старым форматом
+    elif item.date:  # Backward compatibility with legacy field
         current_date_text = item.date.strftime('%d.%m.%Y')
     
     msg = await callback.message.answer(
@@ -197,7 +189,6 @@ async def edit_item_date(callback: CallbackQuery, session: AsyncSession, user, s
 
 @router.callback_query(F.data == "date_single", EditItemStates.date_type)
 async def edit_single_date_choice(callback: CallbackQuery, state: FSMContext):
-    """Выбор одной даты при редактировании"""
     msg = await callback.message.answer(
         "📅 Введите новую дату в формате ДД.ММ.ГГГГ:",
         reply_markup=get_skip_keyboard()
@@ -208,7 +199,6 @@ async def edit_single_date_choice(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "date_range", EditItemStates.date_type)
 async def edit_date_range_choice(callback: CallbackQuery, state: FSMContext):
-    """Выбор диапазона дат при редактировании"""
     msg = await callback.message.answer(
         "📅 Введите дату начала в формате ДД.ММ.ГГГГ:",
         reply_markup=get_back_keyboard()
@@ -219,7 +209,6 @@ async def edit_date_range_choice(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "skip_date", EditItemStates.date_type)
 async def edit_skip_date(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Пропуск даты при редактировании (удаление)"""
     data = await state.get_data()
     item_id = data.get('editing_item_id')
     
@@ -236,8 +225,7 @@ async def edit_skip_date(callback: CallbackQuery, session: AsyncSession, user, s
 
 @router.message(EditItemStates.date_single)
 async def process_edit_single_date(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка новой одной даты"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         data = await state.get_data()
         item_id = data.get('editing_item_id')
         
@@ -281,7 +269,6 @@ async def process_edit_single_date(message: Message, session: AsyncSession, user
 
 @router.message(EditItemStates.date_from)
 async def process_edit_date_from(message: Message, state: FSMContext):
-    """Обработка даты начала при редактировании"""
     date_from = parse_date(message.text)
     
     if date_from:
@@ -297,7 +284,6 @@ async def process_edit_date_from(message: Message, state: FSMContext):
 
 @router.message(EditItemStates.date_to)
 async def process_edit_date_to(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка даты окончания при редактировании"""
     date_to = parse_date(message.text)
     
     if date_to:
@@ -309,7 +295,7 @@ async def process_edit_date_to(message: Message, session: AsyncSession, user, st
             await ItemCRUD.update_item(
                 session, 
                 item_id, 
-                date=date_from,  # Для совместимости
+                date=date_from,  # Backward compatibility field
                 date_from=date_from, 
                 date_to=date_to
             )
@@ -333,7 +319,6 @@ async def process_edit_date_to(message: Message, session: AsyncSession, user, st
 
 @router.callback_query(F.data.startswith("edit_field_comment_"))
 async def edit_item_comment(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Редактирование комментария элемента"""
     item_id = int(callback.data.split("edit_field_comment_")[1])
     
     item = await ItemCRUD.get_item_by_id(session, item_id)
@@ -341,17 +326,17 @@ async def edit_item_comment(callback: CallbackQuery, session: AsyncSession, user
         await callback.answer("❌ Элемент не найден")
         return
     
-    # Проверка прав
     if not await _can_edit(session, item.category_id, user):
         await callback.answer("❌ Нет прав на редактирование", show_alert=True)
         return
     await state.update_data(editing_item_id=item_id, editing_field="comment")
     
     current_comment = item.comment if item.comment else "не указан"
+    safe_comment = escape_markdown(current_comment)
     
     msg = await callback.message.answer(
         f"💬 Редактирование комментария элемента\n"
-        f"Текущий комментарий: **{current_comment}**\n\n"
+        f"Текущий комментарий: **{safe_comment}**\n\n"
         f"Введите новый комментарий:",
         reply_markup=get_skip_keyboard(),
         parse_mode="Markdown"
@@ -362,8 +347,7 @@ async def edit_item_comment(callback: CallbackQuery, session: AsyncSession, user
 
 @router.message(EditItemStates.comment)
 async def process_edit_comment(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка нового комментария"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         data = await state.get_data()
         item_id = data.get('editing_item_id')
         
@@ -395,7 +379,6 @@ async def process_edit_comment(message: Message, session: AsyncSession, user, st
 
 @router.callback_query(F.data.startswith("edit_field_url_"))
 async def edit_item_url(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Редактирование ссылки элемента"""
     item_id = int(callback.data.split("edit_field_url_")[1])
     
     item = await ItemCRUD.get_item_by_id(session, item_id)
@@ -403,17 +386,17 @@ async def edit_item_url(callback: CallbackQuery, session: AsyncSession, user, st
         await callback.answer("❌ Элемент не найден")
         return
     
-    # Проверка прав
     if not await _can_edit(session, item.category_id, user):
         await callback.answer("❌ Нет прав на редактирование", show_alert=True)
         return
     await state.update_data(editing_item_id=item_id, editing_field="url")
     
     current_url = item.url if item.url else "не указана"
+    safe_url = escape_markdown(current_url)
     
     msg = await callback.message.answer(
         f"🔗 Редактирование ссылки элемента\n"
-        f"Текущая ссылка: **{current_url}**\n\n"
+        f"Текущая ссылка: **{safe_url}**\n\n"
         f"Введите новую ссылку:",
         reply_markup=get_skip_keyboard(),
         parse_mode="Markdown"
@@ -424,8 +407,7 @@ async def edit_item_url(callback: CallbackQuery, session: AsyncSession, user, st
 
 @router.message(EditItemStates.url)
 async def process_edit_url(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка новой ссылки"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         data = await state.get_data()
         item_id = data.get('editing_item_id')
         
@@ -457,7 +439,6 @@ async def process_edit_url(message: Message, session: AsyncSession, user, state:
 
 @router.callback_query(F.data.startswith("edit_field_photo_"))
 async def edit_item_photo(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Редактирование фото элемента"""
     item_id = int(callback.data.split("edit_field_photo_")[1])
     
     item = await ItemCRUD.get_item_by_id(session, item_id)
@@ -465,7 +446,6 @@ async def edit_item_photo(callback: CallbackQuery, session: AsyncSession, user, 
         await callback.answer("❌ Элемент не найден")
         return
     
-    # Проверка прав
     if not await _can_edit(session, item.category_id, user):
         await callback.answer("❌ Нет прав на редактирование", show_alert=True)
         return
@@ -486,7 +466,6 @@ async def edit_item_photo(callback: CallbackQuery, session: AsyncSession, user, 
 
 @router.message(EditItemStates.photo, F.photo.is_not(None))
 async def process_edit_photo(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка нового фото"""
     photo = message.photo[-1]
     
     data = await state.get_data()
@@ -505,8 +484,7 @@ async def process_edit_photo(message: Message, session: AsyncSession, user, stat
 
 @router.message(EditItemStates.photo)
 async def process_remove_photo(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Удаление фото или некорректный ввод"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         data = await state.get_data()
         item_id = data.get('editing_item_id')
         
@@ -529,7 +507,6 @@ async def process_remove_photo(message: Message, session: AsyncSession, user, st
 
 @router.callback_query(F.data.startswith("edit_field_tags_"))
 async def edit_item_tags(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Редактирование тегов элемента"""
     item_id = int(callback.data.split("edit_field_tags_")[1])
     
     item = await ItemCRUD.get_item_by_id(session, item_id)
@@ -537,13 +514,11 @@ async def edit_item_tags(callback: CallbackQuery, session: AsyncSession, user, s
         await callback.answer("❌ Элемент не найден")
         return
     
-    # Проверка прав
     if not await _can_edit(session, item.category_id, user):
         await callback.answer("❌ Нет прав на редактирование", show_alert=True)
         return
     await state.update_data(editing_item_id=item_id, editing_field="tags", selected_tags=[])
     
-    # Получаем текущие теги элемента
     current_tags = []
     if item.tags:
         try:
@@ -551,7 +526,7 @@ async def edit_item_tags(callback: CallbackQuery, session: AsyncSession, user, s
         except (json.JSONDecodeError, TypeError):
             current_tags = []
     
-    current_tags_text = ", ".join(f"#{tag}" for tag in current_tags) if current_tags else "нет"
+    current_tags_text = ", ".join(f"
     
     popular_tags = await TagCRUD.get_popular_tags(session, user.id, limit=20)
     
@@ -568,10 +543,8 @@ async def edit_item_tags(callback: CallbackQuery, session: AsyncSession, user, s
 
 @router.callback_query(F.data.startswith("tag_"), EditItemStates.tags)
 async def process_edit_tag_selection(callback: CallbackQuery, state: FSMContext):
-    """Обработка выбора тега при редактировании"""
     tag_name = callback.data.split("tag_", 1)[1]
     
-    # Получаем текущие выбранные теги
     data = await state.get_data()
     current_tags = data.get('selected_tags', [])
     
@@ -584,7 +557,6 @@ async def process_edit_tag_selection(callback: CallbackQuery, state: FSMContext)
 
 @router.callback_query(F.data == "add_new_tag", EditItemStates.tags)
 async def edit_add_new_tag_start(callback: CallbackQuery, state: FSMContext):
-    """Начало добавления нового тега при редактировании"""
     msg = await callback.message.answer(
         "✏️ Введите название нового тега:",
         reply_markup=get_back_keyboard()
@@ -594,8 +566,7 @@ async def edit_add_new_tag_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(EditItemStates.add_new_tag)
 async def process_edit_new_tag(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка нового тега при редактировании"""
-    if message.text == "◀️ Назад":
+    if message.text in BACK_BUTTONS:
         popular_tags = await TagCRUD.get_popular_tags(session, user.id, limit=20)
         msg2 = await message.answer(
             "🏷 Выберите теги или введите новые через запятую:",
@@ -611,7 +582,6 @@ async def process_edit_new_tag(message: Message, session: AsyncSession, user, st
     
     tag_name = message.text.strip().lower()
     
-    # Добавляем тег к выбранным
     data = await state.get_data()
     current_tags = data.get('selected_tags', [])
     user_id = user.id
@@ -621,7 +591,6 @@ async def process_edit_new_tag(message: Message, session: AsyncSession, user, st
         if user_id is not None:
             await TagCRUD.get_or_create_tag(session, tag_name, user_id)
     
-    # Возвращаемся к выбору тегов
     popular_tags = await TagCRUD.get_popular_tags(session, user_id, limit=20)
     
     msg3 = await message.answer(
@@ -633,7 +602,6 @@ async def process_edit_new_tag(message: Message, session: AsyncSession, user, st
 
 @router.callback_query(F.data == "skip_tags", EditItemStates.tags)
 async def finish_edit_tags(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Завершение редактирования тегов"""
     data = await state.get_data()
     item_id = data.get('editing_item_id')
     selected_tags = data.get('selected_tags', [])
@@ -646,7 +614,7 @@ async def finish_edit_tags(callback: CallbackQuery, session: AsyncSession, user,
     
     await cleanup_ephemeral_messages(callback.bot, state, callback.message.chat.id)
     await state.clear()
-    tags_text = ", ".join(f"#{tag}" for tag in selected_tags) if selected_tags else "удалены"
+    tags_text = ", ".join(f"
     ok = await callback.message.answer(
         f"✅ Теги элемента обновлены: **{tags_text}**",
         reply_markup=get_main_keyboard(),
@@ -657,16 +625,13 @@ async def finish_edit_tags(callback: CallbackQuery, session: AsyncSession, user,
 
 @router.message(EditItemStates.tags)
 async def process_edit_manual_tags(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка ввода тегов вручную при редактировании"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         await finish_edit_tags_manual(message, session, state)
         return
     
-    # Парсим теги
     tags = parse_tags(message.text)
     
     if tags:
-        # Добавляем теги к уже выбранным
         data = await state.get_data()
         current_tags = data.get('selected_tags', [])
         user_id = user.id
@@ -700,7 +665,6 @@ async def process_edit_manual_tags(message: Message, session: AsyncSession, user
         await message.answer("❌ Не удалось распознать теги. Попробуйте еще раз или нажмите 'Пропустить':")
 
 async def finish_edit_tags_manual(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Завершение редактирования тегов вручную"""
     data = await state.get_data()
     item_id = data.get('editing_item_id')
     selected_tags = data.get('selected_tags', [])
@@ -713,7 +677,7 @@ async def finish_edit_tags_manual(message: Message, session: AsyncSession, user,
     
     await cleanup_ephemeral_messages(message.bot, state, message.chat.id)
     await state.clear()
-    tags_text = ", ".join(f"#{tag}" for tag in selected_tags) if selected_tags else "удалены"
+    tags_text = ", ".join(f"
     ok = await message.answer(
         f"✅ Теги элемента обновлены: **{tags_text}**",
         reply_markup=get_main_keyboard(),
@@ -723,7 +687,6 @@ async def finish_edit_tags_manual(message: Message, session: AsyncSession, user,
 
 @router.callback_query(F.data.startswith("edit_field_location_"))
 async def edit_item_location(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Редактирование местоположения элемента"""
     item_id = int(callback.data.split("edit_field_location_")[1])
     
     item = await ItemCRUD.get_item_by_id(session, item_id)
@@ -731,19 +694,19 @@ async def edit_item_location(callback: CallbackQuery, session: AsyncSession, use
         await callback.answer("❌ Элемент не найден")
         return
     
-    # Проверка прав
     if not await _can_edit(session, item.category_id, user):
         await callback.answer("❌ Нет прав на редактирование", show_alert=True)
         return
     await state.update_data(editing_item_id=item_id, editing_field="location")
     
     current_location = f"{item.location_value}" if item.location_value else "не указано"
-    if item.location_type:
+    if item.location_type and current_location != "не указано":
         current_location = f"{item.location_type}: {current_location}"
+    safe_current_location = escape_markdown(current_location)
     
     msg = await callback.message.answer(
         f"📍 Редактирование местоположения элемента\n"
-        f"Текущее местоположение: **{current_location}**\n\n"
+        f"Текущее местоположение: **{safe_current_location}**\n\n"
         f"Выберите тип местоположения:",
         reply_markup=get_location_type_keyboard(),
         parse_mode="Markdown"
@@ -754,7 +717,6 @@ async def edit_item_location(callback: CallbackQuery, session: AsyncSession, use
 
 @router.callback_query(F.data.startswith("location_type_"), EditItemStates.location_type)
 async def process_edit_location_type(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Обработка выбора типа местоположения при редактировании"""
     location_type_map = {
         "location_type_city": "в городе",
         "location_type_outside": "за городом", 
@@ -766,7 +728,6 @@ async def process_edit_location_type(callback: CallbackQuery, session: AsyncSess
     if location_type:
         await state.update_data(location_type=location_type)
         
-        # Получаем существующие местоположения этого типа
         locations = await LocationCRUD.get_locations_by_type(session, location_type, user.id)
         
         msg2 = await callback.message.answer(
@@ -780,7 +741,6 @@ async def process_edit_location_type(callback: CallbackQuery, session: AsyncSess
 
 @router.callback_query(F.data == "skip_location", EditItemStates.location_type)
 async def skip_edit_location(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Пропустить (удалить) местоположение при редактировании"""
     data = await state.get_data()
     item_id = data.get('editing_item_id')
     
@@ -797,7 +757,6 @@ async def skip_edit_location(callback: CallbackQuery, session: AsyncSession, use
 
 @router.callback_query(F.data.startswith("location_"), EditItemStates.location_value)
 async def process_edit_location_selection(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Обработка выбора местоположения при редактировании"""
     parts = callback.data.split("_", 2)
     
     if len(parts) >= 3 and parts[1] != "add":
@@ -820,8 +779,9 @@ async def process_edit_location_selection(callback: CallbackQuery, session: Asyn
         await send_item_updated_notification(callback.bot, category, item, user, "edit")
     await cleanup_ephemeral_messages(callback.bot, state, callback.message.chat.id)
     await state.clear()
+    safe_location = escape_markdown(f"{location_type}: {location_value}")
     ok = await callback.message.answer(
-        f"✅ Местоположение элемента обновлено: **{location_type}: {location_value}**",
+        f"✅ Местоположение элемента обновлено: **{safe_location}**",
         reply_markup=get_main_keyboard(),
         parse_mode="Markdown"
     )
@@ -831,7 +791,6 @@ async def process_edit_location_selection(callback: CallbackQuery, session: Asyn
 
 @router.callback_query(F.data.startswith("add_location_"), EditItemStates.location_value)
 async def edit_add_new_location_start(callback: CallbackQuery, state: FSMContext):
-    """Начало добавления нового местоположения при редактировании"""
     location_type = callback.data.split("add_location_")[1]
     await state.update_data(adding_location_type=location_type)
     
@@ -844,7 +803,6 @@ async def edit_add_new_location_start(callback: CallbackQuery, state: FSMContext
 
 @router.message(EditItemStates.add_new_location)
 async def process_edit_new_location(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка нового местоположения при редактировании"""
     if not message.text or message.text.strip() == "":
         await message.answer("❌ Название местоположения не может быть пустым. Попробуйте еще раз:")
         return
@@ -867,8 +825,9 @@ async def process_edit_new_location(message: Message, session: AsyncSession, use
     await send_item_updated_notification(message.bot, category, item, user, "edit")
     await cleanup_ephemeral_messages(message.bot, state, message.chat.id)
     await state.clear()
+    safe_location = escape_markdown(f"{location_type}: {location_value}")
     ok = await message.answer(
-        f"✅ Местоположение элемента обновлено: **{location_type}: {location_value}**",
+        f"✅ Местоположение элемента обновлено: **{safe_location}**",
         reply_markup=get_main_keyboard(),
         parse_mode="Markdown"
     )
@@ -876,7 +835,6 @@ async def process_edit_new_location(message: Message, session: AsyncSession, use
 
 @router.callback_query(F.data == "skip_location", EditItemStates.location_value)
 async def skip_edit_location_value(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Пропустить местоположение при редактировании значения"""
     data = await state.get_data()
     item_id = data.get('editing_item_id')
     

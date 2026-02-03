@@ -13,18 +13,20 @@ from keyboards import (
     get_categories_keyboard, get_tags_keyboard, get_location_type_keyboard,
     get_locations_keyboard, get_product_type_keyboard, get_date_input_keyboard
 )
-from utils.helpers import parse_tags, validate_price, parse_date, format_item_card
+from utils.helpers import parse_tags, validate_price, parse_date, format_item_card, escape_markdown
 from utils.notifications import send_item_added_notification
 from config import MAX_ITEMS_PER_USER
 from utils.cleanup import add_ephemeral_message, cleanup_ephemeral_messages
+from utils.localization import get_value_variants
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-@router.message(F.text == "➕ Добавить элемент")
+BACK_BUTTONS = get_value_variants("buttons.back")
+SKIP_BUTTONS = get_value_variants("buttons.skip")
+
+@router.message(F.text.in_(get_value_variants("buttons.add_item")))
 async def add_item_start(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Начало добавления элемента"""
-    # Проверяем лимит элементов
     user_items = await ItemCRUD.get_user_items(session, user.id)
     
     if len(user_items) >= MAX_ITEMS_PER_USER:
@@ -35,7 +37,6 @@ async def add_item_start(message: Message, session: AsyncSession, user, state: F
         )
         return
     
-    # Проверяем наличие категорий, куда можно добавлять элементы
     editable_categories = await CategoryCRUD.get_user_editable_categories(session, user.id)
     
     if not editable_categories:
@@ -46,7 +47,6 @@ async def add_item_start(message: Message, session: AsyncSession, user, state: F
         )
         return
     
-    # Сохраняем пользователя в состоянии
     await state.update_data(user=user)
     
     msg = await message.answer(
@@ -54,15 +54,13 @@ async def add_item_start(message: Message, session: AsyncSession, user, state: F
         reply_markup=get_back_keyboard()
     )
     
-    # Сохраняем ID сообщения для последующего удаления
     await state.update_data(last_bot_message=msg.message_id)
     await add_ephemeral_message(state, msg.message_id)
     await state.set_state(AddItemStates.name)
 
 @router.message(AddItemStates.name)
 async def process_item_name(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка названия элемента"""
-    if message.text == "◀️ Назад":
+    if message.text in BACK_BUTTONS:
         await state.clear()
         await message.answer(
             "Главное меню:",
@@ -74,11 +72,10 @@ async def process_item_name(message: Message, session: AsyncSession, user, state
         await message.answer("❌ Название элемента не может быть пустым. Попробуйте еще раз:")
         return
     
-    # Сохраняем название
     name = message.text.strip()
     await state.update_data(name=name)
+    safe_name = escape_markdown(name)
     
-    # Показываем категории, доступные для редактирования
     categories = await CategoryCRUD.get_user_editable_categories(session, user.id)
     if not categories:
         await state.clear()
@@ -88,7 +85,6 @@ async def process_item_name(message: Message, session: AsyncSession, user, state
         )
         return
     
-    # Удаляем предыдущее сообщение бота
     data = await state.get_data()
     last_message_id = data.get('last_bot_message')
     if last_message_id:
@@ -98,18 +94,16 @@ async def process_item_name(message: Message, session: AsyncSession, user, state
             pass
     
     msg = await message.answer(
-        f"🎯 Элемент: **{name}**\n\n"
+        f"🎯 Элемент: **{safe_name}**\n\n"
         f"📁 Выберите категорию:",
         reply_markup=get_categories_keyboard(categories),
         parse_mode="Markdown"
     )
     
-    # Сохраняем ID сообщения для последующего удаления
     await state.update_data(last_bot_message=msg.message_id)
     await add_ephemeral_message(state, msg.message_id)
     await state.set_state(AddItemStates.category)
     
-    # Удаляем сообщение пользователя
     try:
         await message.delete()
     except:
@@ -117,7 +111,6 @@ async def process_item_name(message: Message, session: AsyncSession, user, state
 
 @router.callback_query(F.data.startswith("category_"), AddItemStates.category)
 async def process_category_selection(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Обработка выбора категории"""
     category_id = int(callback.data.split("category_")[1])
 
     category = await CategoryCRUD.get_category_by_id(session, category_id)
@@ -136,11 +129,11 @@ async def process_category_selection(callback: CallbackQuery, session: AsyncSess
 
     await state.update_data(category_id=category_id)
     
-    # Получаем все данные
     data = await state.get_data()
     name = data.get('name')
+    safe_name = escape_markdown(name) if name else "—"
+    safe_name = escape_markdown(name) if name else "—"
     
-    # Строим клавиатуру с полями для заполнения
     kb = InlineKeyboardBuilder()
     kb.button(text="🏷 Теги", callback_data="add_tags")
     kb.button(text="💸 Цена", callback_data="add_price")
@@ -152,7 +145,6 @@ async def process_category_selection(callback: CallbackQuery, session: AsyncSess
     kb.button(text="✅ Завершить", callback_data="finish_item")
     kb.adjust(2)
     
-    # Удаляем предыдущее сообщение
     try:
         await callback.message.delete()
     except:
@@ -160,7 +152,7 @@ async def process_category_selection(callback: CallbackQuery, session: AsyncSess
     
     msg = await callback.message.answer(
         f"🎯 Новый элемент\n"
-        f"Название: **{name}**\n\n"
+        f"Название: **{safe_name}**\n\n"
         f"Выберите, что хотите добавить:",
         reply_markup=kb.as_markup(),
         parse_mode="Markdown"
@@ -172,18 +164,16 @@ async def process_category_selection(callback: CallbackQuery, session: AsyncSess
 
 @router.callback_query(F.data == "add_tags", AddItemStates.select_field)
 async def add_tags_handler(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Добавление тегов"""
     data = await state.get_data()
     
-    # Получаем популярные теги пользователя
     popular_tags = await TagCRUD.get_popular_tags(session, user.id, limit=20)
     
     selected_text = "Выберите теги:\n\n"
     current_tags = data.get('selected_tags') or []
     if current_tags:
-        selected_text = "Выбранные теги: " + ", ".join(f"#{t}" for t in current_tags) + "\n\n"
+        formatted_tags = ", ".join(f"#{escape_markdown(t)}" for t in current_tags)
+        selected_text = f"Выбранные теги: {formatted_tags}\n\n"
     
-    # Удаляем предыдущее сообщение
     try:
         await callback.message.delete()
     except:
@@ -199,24 +189,20 @@ async def add_tags_handler(callback: CallbackQuery, session: AsyncSession, user,
 
 @router.callback_query(F.data.startswith("tag_"), AddItemStates.tags)
 async def process_tag_selection(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Обработка выбора тега"""
     tag_name = callback.data.split("tag_", 1)[1]
     data = await state.get_data()
     current_tags = data.get('selected_tags') or []
     
     if tag_name in current_tags:
-        # Если тег уже выбран - удаляем его
         current_tags.remove(tag_name)
         await callback.answer(f"❌ Тег '{tag_name}' удален")
     else:
-        # Если тег не выбран - добавляем
         current_tags.append(tag_name)
         await TagCRUD.get_or_create_tag(session, tag_name, user.id)
         await callback.answer(f"✅ Тег '{tag_name}' добавлен")
     
     await state.update_data(selected_tags=current_tags)
     
-    # Обновляем сообщение с тегами
     popular_tags = await TagCRUD.get_popular_tags(session, user.id, limit=20)
     selected_text = ""
     if current_tags:
@@ -230,7 +216,6 @@ async def process_tag_selection(callback: CallbackQuery, session: AsyncSession, 
 
 @router.callback_query(F.data == "add_new_tag", AddItemStates.tags)
 async def add_new_tag_start(callback: CallbackQuery, state: FSMContext):
-    """Начало добавления нового тега"""
     msg = await callback.message.answer(
         "✏️ Введите название нового тега:",
         reply_markup=get_back_keyboard()
@@ -240,11 +225,9 @@ async def add_new_tag_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddItemStates.add_new_tag)
 async def process_new_tag(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка нового тега"""
-    if message.text == "◀️ Назад":
+    if message.text in BACK_BUTTONS:
         data = await state.get_data()
         
-        # Получаем популярные теги пользователя
         popular_tags = await TagCRUD.get_popular_tags(session, user.id, limit=20)
         
         selected_text = "Выберите теги:\n\n"
@@ -272,7 +255,6 @@ async def process_new_tag(message: Message, session: AsyncSession, user, state: 
         await state.update_data(selected_tags=current_tags)
         await TagCRUD.get_or_create_tag(session, tag_name, user.id)
         
-        # Получаем обновленные популярные теги
         popular_tags = await TagCRUD.get_popular_tags(session, user.id, limit=20)
         
         selected_text = ""
@@ -290,13 +272,11 @@ async def process_new_tag(message: Message, session: AsyncSession, user, state: 
 
 @router.callback_query(F.data == "skip_tags", AddItemStates.tags)
 async def skip_tags(callback: CallbackQuery, state: FSMContext):
-    """Пропустить теги"""
     await return_to_field_selection(callback, state)
 
 @router.message(AddItemStates.tags)
 async def process_manual_tags(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка ввода тегов вручную"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
 
@@ -318,8 +298,6 @@ async def process_manual_tags(message: Message, session: AsyncSession, user, sta
 
 @router.callback_query(F.data == "add_price", AddItemStates.select_field)
 async def add_price_handler(callback: CallbackQuery, state: FSMContext):
-    """Добавление цены"""
-    # Удаляем предыдущее сообщение
     try:
         await callback.message.delete()
     except:
@@ -335,8 +313,7 @@ async def add_price_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddItemStates.price)
 async def process_price(message: Message, state: FSMContext):
-    """Обработка цены"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
     
@@ -354,8 +331,6 @@ async def process_price(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "add_location", AddItemStates.select_field)
 async def add_location_handler(callback: CallbackQuery, state: FSMContext):
-    """Добавление местоположения"""
-    # Удаляем предыдущее сообщение
     try:
         await callback.message.delete()
     except:
@@ -371,7 +346,6 @@ async def add_location_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("location_type_"), AddItemStates.location_type)
 async def process_location_type(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Обработка выбора типа местоположения"""
     location_type_map = {
         "location_type_city": "в городе",
         "location_type_outside": "за городом", 
@@ -393,19 +367,16 @@ async def process_location_type(callback: CallbackQuery, session: AsyncSession, 
 
 @router.callback_query(F.data == "skip_location", AddItemStates.location_type)
 async def skip_location_from_type(callback: CallbackQuery, state: FSMContext):
-    """Пропустить местоположение"""
     await return_to_field_selection(callback, state)
 
 @router.callback_query(F.data.startswith("location_"), AddItemStates.location_value)
 async def process_location_selection(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Обработка выбора местоположения"""
     parts = callback.data.split("_", 2)
     
     if len(parts) >= 3 and parts[1] != "add":
         location_type_key = parts[1]
         location_value = "_".join(parts[2:])
         
-        # Маппинг для правильного получения типа местоположения
         location_type_map = {
             "city": "в городе",
             "outside": "за городом",
@@ -423,7 +394,6 @@ async def process_location_selection(callback: CallbackQuery, session: AsyncSess
 
 @router.callback_query(F.data.startswith("add_location_"), AddItemStates.location_value)
 async def add_new_location_start(callback: CallbackQuery, user, state: FSMContext):
-    """Начало добавления нового местоположения"""
     location_type = callback.data.split("add_location_")[1]
     await state.update_data(adding_location_type=location_type)
     
@@ -435,8 +405,7 @@ async def add_new_location_start(callback: CallbackQuery, user, state: FSMContex
 
 @router.message(AddItemStates.add_new_location)
 async def process_new_location(message: Message, session: AsyncSession, user, state: FSMContext):
-    """Обработка нового местоположения"""
-    if message.text == "◀️ Назад":
+    if message.text in BACK_BUTTONS:
         data = await state.get_data()
         location_type = data.get('location_type')
         locations = await LocationCRUD.get_locations_by_type(session, location_type, user.id)
@@ -462,13 +431,10 @@ async def process_new_location(message: Message, session: AsyncSession, user, st
 
 @router.callback_query(F.data == "skip_location", AddItemStates.location_value)
 async def skip_location_from_value(callback: CallbackQuery, state: FSMContext):
-    """Пропустить местоположение"""
     await return_to_field_selection(callback, state)
 
 @router.callback_query(F.data == "add_date", AddItemStates.select_field)
 async def add_date_handler(callback: CallbackQuery, state: FSMContext):
-    """Добавление даты"""
-    # Удаляем предыдущее сообщение
     try:
         await callback.message.delete()
     except:
@@ -483,7 +449,6 @@ async def add_date_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "date_single", AddItemStates.date_type)
 async def date_single_handler(callback: CallbackQuery, state: FSMContext):
-    """Обработка выбора одной даты"""
     await callback.message.edit_text(
         "📅 Введите дату в формате ДД.ММ.ГГГГ или нажмите 'Пропустить':",
         reply_markup=get_skip_inline_keyboard()
@@ -492,7 +457,6 @@ async def date_single_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "date_range", AddItemStates.date_type)
 async def date_range_handler(callback: CallbackQuery, state: FSMContext):
-    """Обработка выбора диапазона дат"""
     await callback.message.edit_text(
         "📅 Введите начальную дату в формате ДД.ММ.ГГГГ:",
         reply_markup=get_skip_inline_keyboard()
@@ -501,18 +465,15 @@ async def date_range_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "skip_date", AddItemStates.date_type)
 async def skip_date_handler(callback: CallbackQuery, state: FSMContext):
-    """Пропустить дату"""
     await return_to_field_selection(callback, state)
 
 @router.callback_query(F.data == "skip_field")
 async def skip_field_handler(callback: CallbackQuery, state: FSMContext):
-    """Пропустить поле"""
     await return_to_field_selection(callback, state)
 
 @router.message(AddItemStates.date_single)
 async def process_date_single(message: Message, state: FSMContext):
-    """Обработка одной даты"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
     
@@ -529,8 +490,7 @@ async def process_date_single(message: Message, state: FSMContext):
 
 @router.message(AddItemStates.date_from)
 async def process_date_from(message: Message, state: FSMContext):
-    """Обработка начальной даты диапазона"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
 
@@ -550,8 +510,7 @@ async def process_date_from(message: Message, state: FSMContext):
 
 @router.message(AddItemStates.date_to)
 async def process_date_to(message: Message, state: FSMContext):
-    """Обработка конечной даты диапазона"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
 
@@ -576,8 +535,6 @@ async def process_date_to(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "add_url", AddItemStates.select_field)
 async def add_url_handler(callback: CallbackQuery, state: FSMContext):
-    """Добавление ссылки"""
-    # Удаляем предыдущее сообщение
     try:
         await callback.message.delete()
     except:
@@ -593,8 +550,7 @@ async def add_url_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddItemStates.url)
 async def process_url(message: Message, state: FSMContext):
-    """Обработка ссылки"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
         
@@ -611,8 +567,6 @@ async def process_url(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "add_comment", AddItemStates.select_field)
 async def add_comment_handler(callback: CallbackQuery, state: FSMContext):
-    """Добавление комментария"""
-    # Удаляем предыдущее сообщение
     try:
         await callback.message.delete()
     except:
@@ -628,8 +582,7 @@ async def add_comment_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddItemStates.comment)
 async def process_comment(message: Message, state: FSMContext):
-    """Обработка комментария"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
     
@@ -640,8 +593,6 @@ async def process_comment(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "add_photo", AddItemStates.select_field)
 async def add_photo_handler(callback: CallbackQuery, state: FSMContext):
-    """Добавление фото"""
-    # Удаляем предыдущее сообщение
     try:
         await callback.message.delete()
     except:
@@ -657,16 +608,14 @@ async def add_photo_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddItemStates.photo, F.photo.is_not(None))
 async def process_photo(message: Message, state: FSMContext):
-    """Обработка фото"""
-    photo = message.photo[-1]  # Берем самое большое фото
+    photo = message.photo[-1]
     await state.update_data(photo_file_id=photo.file_id)
     await message.answer("✅ Фото добавлено")
     await return_to_field_selection(message, state)
 
 @router.message(AddItemStates.photo)
 async def process_photo_text(message: Message, state: FSMContext):
-    """Обработка текста в состоянии фото"""
-    if message.text == "⏭ Пропустить":
+    if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
 
@@ -674,10 +623,8 @@ async def process_photo_text(message: Message, state: FSMContext):
 
 @router.callback_query(F.data == "finish_item", AddItemStates.select_field)
 async def finish_item(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
-    """Завершение добавления элемента"""
     data = await state.get_data()
     
-    # Получаем все данные
     name = data.get('name')
     category_id = data.get('category_id')
     selected_tags = data.get('selected_tags', [])
@@ -709,7 +656,6 @@ async def finish_item(callback: CallbackQuery, session: AsyncSession, user, stat
             await callback.answer("❌ У вас нет прав добавлять элементы в эту категорию", show_alert=True)
             return
 
-        # Создаем элемент
         item_data = {
             'name': name,
             'category_id': category_id,
@@ -720,38 +666,30 @@ async def finish_item(callback: CallbackQuery, session: AsyncSession, user, stat
             'photo_file_id': photo_file_id
         }
         
-        # Добавляем местоположение если есть
         if location_type and location_value:
             location = await LocationCRUD.get_or_create_location(session, location_type, location_value, user.id)
             item_data['location_id'] = location.id
         
-        # Создаем элемент
         item = await ItemCRUD.create_item(session, **item_data)
         
-        # Добавляем теги
         if selected_tags:
             await ItemCRUD.add_tags_to_item(session, item.id, selected_tags, user.id)
         
-        # Отправляем уведомления
         if category and category.sharing_type in ["view_only", "collaborative"]:
             await send_item_added_notification(callback.bot, category, item, user)
         
-        # Формируем карточку элемента
         item_card = await format_item_card(session, item)
         
-        # Удаляем предыдущее сообщение
         try:
             await callback.message.delete()
         except:
             pass
         
-        # Перед показом результата — подчистим временные сообщения
         try:
             await cleanup_ephemeral_messages(callback.bot, state, callback.message.chat.id)
         except Exception:
             pass
 
-        # Отправляем результат
         if item.photo_file_id:
             await callback.message.answer_photo(
                 photo=item.photo_file_id,
@@ -770,7 +708,6 @@ async def finish_item(callback: CallbackQuery, session: AsyncSession, user, stat
         await state.clear()
         
     except Exception as e:
-        # Подробный лог для диагностики
         try:
             logger.exception("Ошибка при завершении добавления элемента. state=%s", data)
         except Exception:
@@ -778,11 +715,9 @@ async def finish_item(callback: CallbackQuery, session: AsyncSession, user, stat
         await callback.answer(f"❌ Ошибка при создании элемента: {str(e)}")
 
 async def return_to_field_selection(message_or_callback, state: FSMContext):
-    """Возврат к выбору полей"""
     data = await state.get_data()
     name = data.get('name')
     
-    # Строим клавиатуру с полями для заполнения
     kb = InlineKeyboardBuilder()
     kb.button(text="🏷 Теги", callback_data="add_tags")
     kb.button(text="💸 Цена", callback_data="add_price")
@@ -794,7 +729,6 @@ async def return_to_field_selection(message_or_callback, state: FSMContext):
     kb.button(text="✅ Завершить", callback_data="finish_item")
     kb.adjust(2)
     
-    # Удаляем предыдущее сообщение бота
     last_message_id = data.get('last_bot_message')
     if last_message_id:
         try:
@@ -811,11 +745,10 @@ async def return_to_field_selection(message_or_callback, state: FSMContext):
         except:
             pass
     
-    # Отправляем новое сообщение
     if hasattr(message_or_callback, 'message'):
         msg = await message_or_callback.message.answer(
             f"🎯 Новый элемент\n"
-            f"Название: **{name}**\n\n"
+            f"Название: **{safe_name}**\n\n"
             f"Выберите, что хотите добавить:",
             reply_markup=kb.as_markup(),
             parse_mode="Markdown"
@@ -823,7 +756,7 @@ async def return_to_field_selection(message_or_callback, state: FSMContext):
     else:
         msg = await message_or_callback.answer(
             f"🎯 Новый элемент\n"
-            f"Название: **{name}**\n\n"
+            f"Название: **{safe_name}**\n\n"
             f"Выберите, что хотите добавить:",
             reply_markup=kb.as_markup(),
             parse_mode="Markdown"

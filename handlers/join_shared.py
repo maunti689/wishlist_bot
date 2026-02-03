@@ -7,13 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.crud import CategoryCRUD
 from keyboards import get_main_keyboard
+from utils.localization import get_value_variants
 
 router = Router()
 
 class JoinSharedCategoryStates(StatesGroup):
     waiting_for_code = State()
 
-@router.message(F.text == "🔗 Ввести код доступа")
+@router.message(F.text.in_(get_value_variants("buttons.enter_code")))
 async def ask_for_share_code(message: Message, state: FSMContext):
     await message.answer("🔑 Введите код доступа к категории:")
     await state.set_state(JoinSharedCategoryStates.waiting_for_code)
