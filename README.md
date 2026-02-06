@@ -1,5 +1,6 @@
 # Wishlist Bot
 
+
 A Telegram bot for managing personal and shared wishlists: categories, filters, reminders, and flexible access control.
 
 ## Features
