@@ -24,8 +24,8 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 # Notification settings
 NOTIFICATION_DAYS_BEFORE = [7, 1]  # Days before date when reminders are sent
 
-# Time zone
-TIMEZONE = os.getenv("TIMEZONE", "Europe/Moscow")
+# Time zone (default to a neutral EU zone)
+TIMEZONE = os.getenv("TIMEZONE", "Europe/Amsterdam")
 
 # Logging level and optional settings
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

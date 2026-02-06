@@ -47,7 +47,7 @@ A Telegram bot for managing personal and shared wishlists: categories, filters, 
 |--------|---------|-------------|
 | `BOT_TOKEN` | — | **Required.** Telegram bot token from BotFather. |
 | `DATABASE_URL` | `sqlite+aiosqlite:///./wishlist.db` | Database connection string (SQLite by default). |
-| `TIMEZONE` | `Europe/Moscow` | Time zone used for date formatting and reminders. |
+| `TIMEZONE` | `Europe/Amsterdam` | Time zone used for date formatting and reminders. |
 | `LOG_LEVEL` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, ...). |
 | `USE_PID_LOCK` | `0` | Enable `bot.pid` lock file (`1` / `true`). |
 | `REDIS_URL` | `redis://localhost:6379/0` | *(Optional)* Redis URL for persistent FSM storage or rate-limiting. Requires Redis setup and the `redis` Python package if enabled. |
