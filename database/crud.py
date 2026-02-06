@@ -195,7 +195,7 @@ class ItemCRUD:
             await session.refresh(item)
             return item
         except Exception as e:
-            logger.error(f"Ошибка создания элемента: {e}")
+            logger.error(f"Error creating item: {e}")
             await session.rollback()
             raise
 
@@ -253,7 +253,7 @@ class ItemCRUD:
             await session.execute(update(Item).where(Item.id == item_id).values(**kwargs))
             await session.commit()
         except Exception as e:
-            logger.error(f"Ошибка обновления элемента: {e}")
+            logger.error(f"Error updating item: {e}")
             await session.rollback()
             raise
 
@@ -268,7 +268,7 @@ class ItemCRUD:
             # Load the item first
             item = await ItemCRUD.get_item_by_id(session, item_id)
             if not item:
-                raise ValueError("Элемент не найден")
+                raise ValueError("Item not found")
             
             # Create or fetch tags
             tags = []
@@ -287,7 +287,7 @@ class ItemCRUD:
             await session.commit()
             
         except Exception as e:
-            logger.error(f"Ошибка при добавлении тегов к элементу: {e}")
+            logger.error(f"Error while attaching tags to item: {e}")
             await session.rollback()
             raise
 
@@ -343,7 +343,7 @@ class TagCRUD:
         try:
             clean_name = name.strip().lower()
             if not clean_name:
-                raise ValueError("Название тега не может быть пустым")
+                raise ValueError("Tag name cannot be empty")
             
             # Look up existing tag
             result = await session.execute(
@@ -364,7 +364,7 @@ class TagCRUD:
             
             return tag
         except Exception as e:
-            logger.error(f"Ошибка при работе с тегом '{name}': {e}")
+            logger.error(f"Error while processing tag '{name}': {e}")
             await session.rollback()
             raise
 
@@ -378,7 +378,7 @@ class TagCRUD:
             )
             return list(result.scalars().all())
         except Exception as e:
-            logger.error(f"Ошибка получения популярных тегов: {e}")
+            logger.error(f"Error fetching popular tags: {e}")
             return []
 
 class LocationCRUD:
@@ -405,7 +405,7 @@ class LocationCRUD:
                 await session.refresh(location)
             return location
         except Exception as e:
-            logger.error(f"Ошибка при работе с локацией: {e}")
+            logger.error(f"Error while processing location: {e}")
             await session.rollback()
             raise
 
@@ -419,7 +419,7 @@ class LocationCRUD:
             )
             return list(result.scalars().all())
         except Exception as e:
-            logger.error(f"Ошибка получения локаций: {e}")
+            logger.error(f"Error fetching locations: {e}")
             return []
 
     @staticmethod
@@ -428,5 +428,5 @@ class LocationCRUD:
             result = await session.execute(select(Location).where(Location.id == location_id))
             return result.scalar_one_or_none()
         except Exception as e:
-            logger.error(f"Ошибка получения локации по id: {e}")
+            logger.error(f"Error fetching location by id: {e}")
             return None

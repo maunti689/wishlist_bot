@@ -20,7 +20,7 @@ class BackButtonMiddleware(BaseMiddleware):
             state: FSMContext = data["state"]
             current_state = await state.get_state()
             
-            logger.info(f"Нажата кнопка 'Назад' в состоянии: {current_state}")
+            logger.info(f"'Back' button pressed in state: {current_state}")
             
             try:
                 await cleanup_ephemeral_messages(event.bot, state, event.chat.id)

@@ -94,7 +94,7 @@ async def settings_menu(message: Message, session: AsyncSession, user, state: FS
             parse_mode="Markdown"
         )
     except Exception as e:
-        logger.error(f"Ошибка в settings_menu: {e}")
+        logger.error(f"Error in settings_menu: {e}")
         await message.answer(
             translate_text(
                 get_user_language(user),
@@ -110,7 +110,9 @@ async def toggle_notifications(callback: CallbackQuery, session: AsyncSession, u
         current_user = await UserCRUD.get_user_by_telegram_id(session, callback.from_user.id)
         
         if not current_user:
-            await callback.answer("❌ Пользователь не найден")
+            await callback.answer(
+                translate_text(get_user_language(user), "❌ User not found", "❌ Пользователь не найден")
+            )
             return
 
         new_state = not current_user.notifications_enabled
@@ -131,7 +133,7 @@ async def toggle_notifications(callback: CallbackQuery, session: AsyncSession, u
         )
         
     except Exception as e:
-        logger.error(f"Ошибка в toggle_notifications: {e}")
+        logger.error(f"Error in toggle_notifications: {e}")
         await callback.answer(
             translate_text(get_user_language(user), "❌ Failed to update settings", "❌ Ошибка изменения настроек")
         )
@@ -165,7 +167,9 @@ async def back_to_settings(callback: CallbackQuery, session: AsyncSession, user)
 async def set_language(callback: CallbackQuery, session: AsyncSession, user):
     new_language = callback.data.split("set_language_")[1]
     if new_language not in SUPPORTED_LANGUAGES:
-        await callback.answer("❌")
+        await callback.answer(
+            translate_text(get_user_language(user), "❌ Unsupported language", "❌ Неподдерживаемый язык")
+        )
         return
 
     await UserCRUD.update_user_language(session, user.id, new_language)

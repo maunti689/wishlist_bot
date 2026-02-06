@@ -4,6 +4,12 @@ from typing import List, Optional, Dict, Any, Tuple
 import re
 import secrets
 from config import DATE_FORMAT
+from utils.localization import (
+    translate_text,
+    normalize_language,
+    DEFAULT_LANGUAGE,
+    translate as _,
+)
 
 def parse_tags(tags_string: str) -> List[str]:
     """Parse a comma-separated string of tags."""
@@ -19,155 +25,262 @@ def parse_tags(tags_string: str) -> List[str]:
     
     return tags
 
-async def format_item_card(session, item) -> str:
+def normalize_location_type(location_type: Optional[str]) -> Optional[str]:
+    """Normalize stored location types to canonical codes."""
+    if not location_type:
+        return None
+    aliases = {
+        "в городе": "city",
+        "за городом": "outside",
+        "по району": "district",
+    }
+    return aliases.get(location_type, location_type)
+
+
+def get_location_label(location_type: Optional[str], language: Optional[str]) -> str:
+    """Return localized label for a location type."""
+    normalized = normalize_location_type(location_type)
+    translation_keys = {
+        "city": "location.city",
+        "outside": "location.outside",
+        "district": "location.district",
+    }
+    key = translation_keys.get(normalized)
+    if key:
+        return _(key, language=language)
+    return location_type or ""
+
+
+def normalize_product_type(product_type: Optional[str]) -> Optional[str]:
+    """Normalize stored product types to canonical codes."""
+    if not product_type:
+        return None
+    aliases = {
+        "мероприятие": "event",
+        "кафе/ресторан": "restaurant",
+        "вещь": "thing",
+        "item": "thing",
+    }
+    return aliases.get(product_type, product_type)
+
+
+def get_product_type_label(product_type: Optional[str], language: Optional[str]) -> str:
+    """Return localized label for a product type."""
+    normalized = normalize_product_type(product_type)
+    translation_keys = {
+        "event": "product.event",
+        "restaurant": "product.restaurant",
+        "thing": "product.thing",
+    }
+    key = translation_keys.get(normalized)
+    if key:
+        return _(key, language=language)
+    return product_type or ""
+
+async def format_item_card(session, item, language: Optional[str] = None) -> str:
     """Render a text card for an item using DB session helpers."""
     try:
-        title = escape_markdown(str(item.name)) if getattr(item, 'name', None) else 'Без названия'
-        card = f"🎯 **{title}**\n\n"
-        
-        if hasattr(item, 'category') and item.category:
+        language = normalize_language(language)
+        title = escape_markdown(str(item.name)) if getattr(item, "name", None) else translate_text(language, "Untitled", "Без названия")
+        card = translate_text(language, f"🎯 **{title}**\n\n", f"🎯 **{title}**\n\n")
+
+        if hasattr(item, "category") and item.category:
             cat = escape_markdown(item.category.name)
-            card += f"📁 Категория: {cat}\n"
-        
+            card += translate_text(language, f"📁 Category: {cat}\n", f"📁 Категория: {cat}\n")
+
         # Tags
         if item.tags:
             try:
                 tags_list = json.loads(item.tags) if isinstance(item.tags, str) else item.tags
                 if tags_list and isinstance(tags_list, list):
                     tags_str = ", ".join(f"#{escape_markdown(str(tag))}" for tag in tags_list)
-                    card += f"🏷 Теги: {tags_str}\n"
+                    card += translate_text(language, f"🏷 Tags: {tags_str}\n", f"🏷 Теги: {tags_str}\n")
             except (json.JSONDecodeError, TypeError):
                 pass
-        
+
         # Price
         if item.price:
-            card += f"💸 Стоимость: {format_price(item.price)}\n"
-        
+            card += translate_text(language, f"💸 Price: {format_price(item.price)}\n", f"💸 Стоимость: {format_price(item.price)}\n")
+
         # Location
-        if hasattr(item, 'location_id') and item.location_id:
-            # Load stored location by ID
+        if hasattr(item, "location_id") and item.location_id:
             from database.crud import LocationCRUD
             location = await LocationCRUD.get_location_by_id(session, item.location_id)
             if location:
                 location_emoji = get_location_emoji(location.location_type)
-                card += f"{location_emoji} Местоположение: {escape_markdown(location.name)}\n"
+                card += translate_text(
+                    language,
+                    f"{location_emoji} Location: {escape_markdown(location.name)}\n",
+                    f"{location_emoji} Местоположение: {escape_markdown(location.name)}\n"
+                )
         elif item.location_type and item.location_value:
             location_emoji = get_location_emoji(item.location_type)
-            card += f"{location_emoji} Местоположение: {escape_markdown(item.location_value)}\n"
-        
+            card += translate_text(
+                language,
+                f"{location_emoji} Location: {escape_markdown(item.location_value)}\n",
+                f"{location_emoji} Местоположение: {escape_markdown(item.location_value)}\n"
+            )
+
         # Date info
-        if hasattr(item, 'date_from') and item.date_from:
-            if hasattr(item, 'date_to') and item.date_to and item.date_to != item.date_from:
-                # Date range
-                card += f"📅 Период: {item.date_from.strftime(DATE_FORMAT)} - {item.date_to.strftime(DATE_FORMAT)}\n"
+        if hasattr(item, "date_from") and item.date_from:
+            if hasattr(item, "date_to") and item.date_to and item.date_to != item.date_from:
+                card += translate_text(
+                    language,
+                    f"📅 Period: {item.date_from.strftime(DATE_FORMAT)} - {item.date_to.strftime(DATE_FORMAT)}\n",
+                    f"📅 Период: {item.date_from.strftime(DATE_FORMAT)} - {item.date_to.strftime(DATE_FORMAT)}\n"
+                )
             else:
-                # Single date
-                card += f"📅 Дата: {item.date_from.strftime(DATE_FORMAT)}\n"
-        elif hasattr(item, 'date') and item.date:  # Legacy compatibility
-            card += f"📅 Дата: {item.date.strftime(DATE_FORMAT)}\n"
-        
+                card += translate_text(
+                    language,
+                    f"📅 Date: {item.date_from.strftime(DATE_FORMAT)}\n",
+                    f"📅 Дата: {item.date_from.strftime(DATE_FORMAT)}\n"
+                )
+        elif hasattr(item, "date") and item.date:
+            card += translate_text(language, f"📅 Date: {item.date.strftime(DATE_FORMAT)}\n", f"📅 Дата: {item.date.strftime(DATE_FORMAT)}\n")
+
         # Product type
-        if item.product_type and item.product_type != "вещь":
+        normalized_type = normalize_product_type(getattr(item, "product_type", None))
+        if normalized_type and normalized_type != "thing":
             type_emoji = get_product_type_emoji(item.product_type)
-            card += f"{type_emoji} Тип: {escape_markdown(item.product_type)}\n"
-        
+            label = escape_markdown(get_product_type_label(item.product_type, language))
+            card += translate_text(
+                language,
+                f"{type_emoji} Type: {label}\n",
+                f"{type_emoji} Тип: {label}\n"
+            )
+
         # URL
         if item.url:
-            card += f"🔗 Ссылка: {escape_markdown(item.url)}\n"
-        
+            card += translate_text(language, f"🔗 Link: {escape_markdown(item.url)}\n", f"🔗 Ссылка: {escape_markdown(item.url)}\n")
+
         # Comment
         if item.comment:
-            card += f"💬 Комментарий: {escape_markdown(item.comment)}\n"
-        
-        return card
-        
-    except Exception as e:
-        # Fallback when formatting fails
-        return f"🎯 **{getattr(item, 'name', 'Неизвестный элемент')}**\n❌ Ошибка отображения данных"
+            card += translate_text(language, f"💬 Comment: {escape_markdown(item.comment)}\n", f"💬 Комментарий: {escape_markdown(item.comment)}\n")
 
-def format_item_card_sync(item) -> str:
+        return card
+
+    except Exception:
+        fallback_name = escape_markdown(
+            str(getattr(item, "name", translate_text(language, "Unknown item", "Неизвестный элемент")))
+        )
+        return translate_text(
+            language,
+            f"🎯 **{fallback_name}**\n❌ Failed to render item data",
+            f"🎯 **{fallback_name}**\n❌ Ошибка отображения данных"
+        )
+
+def format_item_card_sync(item, language: Optional[str] = None) -> str:
     """Synchronous helper that builds an item card."""
     try:
-        title = escape_markdown(str(item.name)) if getattr(item, 'name', None) else 'Без названия'
-        card = f"🎯 **{title}**\n\n"
-        
-        if hasattr(item, 'category') and item.category:
+        language = normalize_language(language)
+        title = escape_markdown(str(item.name)) if getattr(item, "name", None) else translate_text(language, "Untitled", "Без названия")
+        card = translate_text(language, f"🎯 **{title}**\n\n", f"🎯 **{title}**\n\n")
+
+        if hasattr(item, "category") and item.category:
             cat = escape_markdown(item.category.name)
-            card += f"📁 Категория: {cat}\n"
-        
-        # Tags
+            card += translate_text(language, f"📁 Category: {cat}\n", f"📁 Категория: {cat}\n")
+
         if item.tags:
             try:
                 tags_list = json.loads(item.tags) if isinstance(item.tags, str) else item.tags
                 if tags_list and isinstance(tags_list, list):
                     tags_str = ", ".join(f"#{escape_markdown(str(tag))}" for tag in tags_list)
-                    card += f"🏷 Теги: {tags_str}\n"
+                    card += translate_text(language, f"🏷 Tags: {tags_str}\n", f"🏷 Теги: {tags_str}\n")
             except (json.JSONDecodeError, TypeError):
                 pass
-        
-        # Price
+
         if item.price:
-            card += f"💸 Стоимость: {format_price(item.price)}\n"
-        
-        # Location
+            card += translate_text(language, f"💸 Price: {format_price(item.price)}\n", f"💸 Стоимость: {format_price(item.price)}\n")
+
         if item.location_type and item.location_value:
             location_emoji = get_location_emoji(item.location_type)
-            card += f"{location_emoji} Местоположение: {escape_markdown(item.location_value)}\n"
-        
-        # Date info
-        if hasattr(item, 'date_from') and item.date_from:
-            if hasattr(item, 'date_to') and item.date_to and item.date_to != item.date_from:
-                # Date range
-                card += f"📅 Период: {item.date_from.strftime(DATE_FORMAT)} - {item.date_to.strftime(DATE_FORMAT)}\n"
+            card += translate_text(
+                language,
+                f"{location_emoji} Location: {escape_markdown(item.location_value)}\n",
+                f"{location_emoji} Местоположение: {escape_markdown(item.location_value)}\n"
+            )
+
+        if hasattr(item, "date_from") and item.date_from:
+            if hasattr(item, "date_to") and item.date_to and item.date_to != item.date_from:
+                card += translate_text(
+                    language,
+                    f"📅 Period: {item.date_from.strftime(DATE_FORMAT)} - {item.date_to.strftime(DATE_FORMAT)}\n",
+                    f"📅 Период: {item.date_from.strftime(DATE_FORMAT)} - {item.date_to.strftime(DATE_FORMAT)}\n"
+                )
             else:
-                # Single date
-                card += f"📅 Дата: {item.date_from.strftime(DATE_FORMAT)}\n"
-        elif hasattr(item, 'date') and item.date:  # Legacy compatibility
-            card += f"📅 Дата: {item.date.strftime(DATE_FORMAT)}\n"
-        
-        # Product type
-        if item.product_type and item.product_type != "вещь":
+                card += translate_text(language, f"📅 Date: {item.date_from.strftime(DATE_FORMAT)}\n", f"📅 Дата: {item.date_from.strftime(DATE_FORMAT)}\n")
+        elif hasattr(item, "date") and item.date:
+            card += translate_text(language, f"📅 Date: {item.date.strftime(DATE_FORMAT)}\n", f"📅 Дата: {item.date.strftime(DATE_FORMAT)}\n")
+
+        normalized_type = normalize_product_type(getattr(item, "product_type", None))
+        if normalized_type and normalized_type != "thing":
             type_emoji = get_product_type_emoji(item.product_type)
-            card += f"{type_emoji} Тип: {escape_markdown(item.product_type)}\n"
-        
-        # URL
+            label = escape_markdown(get_product_type_label(item.product_type, language))
+            card += translate_text(
+                language,
+                f"{type_emoji} Type: {label}\n",
+                f"{type_emoji} Тип: {label}\n"
+            )
+
         if item.url:
-            card += f"🔗 Ссылка: {escape_markdown(item.url)}\n"
-        
-        # Comment
+            card += translate_text(language, f"🔗 Link: {escape_markdown(item.url)}\n", f"🔗 Ссылка: {escape_markdown(item.url)}\n")
+
         if item.comment:
-            card += f"💬 Комментарий: {escape_markdown(item.comment)}\n"
-        
+            card += translate_text(language, f"💬 Comment: {escape_markdown(item.comment)}\n", f"💬 Комментарий: {escape_markdown(item.comment)}\n")
+
         return card
-        
-    except Exception as e:
-        # Fallback when formatting fails
-        return f"🎯 **{getattr(item, 'name', 'Неизвестный элемент')}**\n❌ Ошибка отображения данных"
+
+    except Exception:
+        fallback_name = escape_markdown(
+            str(getattr(item, "name", translate_text(language, "Unknown item", "Неизвестный элемент")))
+        )
+        return translate_text(
+            language,
+            f"🎯 **{fallback_name}**\n❌ Failed to render item data",
+            f"🎯 **{fallback_name}**\n❌ Ошибка отображения данных"
+        )
 
 def format_price(price: float) -> str:
     """Format price with thousands separator and currency."""
     if price == int(price):
-        return f"{int(price):,} ₽".replace(",", " ")
+        return f"{int(price):,}".replace(",", " ")
     else:
-        return f"{price:,.2f} ₽".replace(",", " ")
+        return f"{price:,.2f}".replace(",", " ")
 
 def get_location_emoji(location_type: str) -> str:
     """Return emoji associated with a location type."""
     emoji_map = {
+        "city": "🏙",
+        "outside": "🌲",
+        "district": "🏘",
+    }
+    normalized = normalize_location_type(location_type)
+    if normalized in emoji_map:
+        return emoji_map[normalized]
+    # Legacy values
+    legacy_map = {
         "в городе": "🏙",
         "за городом": "🌲",
-        "по району": "🏘"
+        "по району": "🏘",
     }
-    return emoji_map.get(location_type, "📍")
+    return legacy_map.get(location_type, "📍")
 
 def get_product_type_emoji(product_type: str) -> str:
     """Return emoji associated with product type."""
     emoji_map = {
+        "event": "🎪",
+        "restaurant": "🍽",
+        "thing": "🛍",
+    }
+    normalized = normalize_product_type(product_type)
+    if normalized in emoji_map:
+        return emoji_map[normalized]
+    legacy_map = {
         "мероприятие": "🎪",
         "кафе/ресторан": "🍽",
-        "вещь": "🛍"
+        "вещь": "🛍",
     }
-    return emoji_map.get(product_type, "🛍")
+    return legacy_map.get(product_type, "🛍")
 
 def parse_date(date_string: str) -> Optional[datetime]:
     """Parse a date string in DATE_FORMAT."""

@@ -18,6 +18,7 @@ from middlewares.db import DatabaseMiddleware
 from middlewares.back_button import BackButtonMiddleware
 from middlewares.chat_cleaner import ChatCleanerMiddleware
 from utils.notifications import NotificationScheduler
+from utils.localization import translate_text, normalize_language, DEFAULT_LANGUAGE
 
 # Logging setup
 logging.basicConfig(
@@ -40,7 +41,7 @@ def acquire_lock() -> bool:
                     # Exit if another process is running
                     try:
                         os.kill(pid, 0)
-                        logger.error("Найден запущенный экземпляр (pid=%s). Выход.", pid)
+                        logger.error("Another instance is already running (pid=%s). Exiting.", pid)
                         return False
                     except OSError:
                         # Lock file is stale
@@ -51,7 +52,7 @@ def acquire_lock() -> bool:
             f.write(str(os.getpid()))
         return True
     except Exception as e:
-        logger.error("Не удалось создать lock-файл: %s", e)
+        logger.error("Unable to create lock file: %s", e)
         return True  # Do not block launch if lock file cannot be created
 
 def release_lock():
@@ -64,10 +65,10 @@ def release_lock():
 async def _init_storage():
     try:
         redis = await ensure_redis_connection()
-        logger.info("Redis FSM storage инициализирован")
+        logger.info("Redis FSM storage initialized")
         return RedisStorage(redis=redis), True
     except Exception as exc:
-        logger.warning("Redis недоступен (%s). Используем MemoryStorage.", exc)
+        logger.warning("Redis unavailable (%s). Falling back to MemoryStorage.", exc)
         return MemoryStorage(), False
 
 
@@ -98,23 +99,39 @@ async def run_bot() -> None:
         # Global error handler
         @dp.errors()
         async def error_handler(event, **kwargs):
-            logger.exception("Необработанная ошибка: %s", event.exception)
+            logger.exception("Unhandled exception: %s", event.exception)
 
             try:
                 from keyboards import get_main_keyboard
+
+                def detect_language(update):
+                    code = None
+                    if update.message and update.message.from_user:
+                        code = update.message.from_user.language_code
+                    elif update.callback_query and update.callback_query.from_user:
+                        code = update.callback_query.from_user.language_code
+                    return normalize_language(code)
+
+                language = detect_language(event.update) if getattr(event, "update", None) else DEFAULT_LANGUAGE
+                fallback_text = translate_text(
+                    language,
+                    "❌ An error occurred. Please try again.",
+                    "❌ Произошла ошибка. Попробуйте еще раз."
+                )
+
                 if event.update.message:
                     await event.update.message.answer(
-                        "❌ Произошла ошибка. Попробуйте еще раз или обратитесь к администратору.",
-                        reply_markup=get_main_keyboard()
+                        fallback_text,
+                        reply_markup=get_main_keyboard(language=language)
                     )
                 elif event.update.callback_query:
                     await event.update.callback_query.message.answer(
-                        "❌ Произошла ошибка. Попробуйте еще раз.",
-                        reply_markup=get_main_keyboard()
+                        fallback_text,
+                        reply_markup=get_main_keyboard(language=language)
                     )
                     await event.update.callback_query.answer()
             except Exception as e:
-                logger.error(f"Ошибка при обработке ошибки: {e}")
+                logger.error(f"Error while sending fallback error message: {e}")
 
             return True
 
@@ -122,7 +139,7 @@ async def run_bot() -> None:
         notification_scheduler = NotificationScheduler(bot)
         scheduler_task = asyncio.create_task(notification_scheduler.start())
 
-        logger.info("Бот запущен и готов к работе")
+        logger.info("Bot started and ready")
         try:
             await dp.start_polling(bot)
         finally:
@@ -146,7 +163,7 @@ async def main():
 
     try:
         # Initialize database
-        logger.info("Инициализация базы данных...")
+        logger.info("Initializing database...")
         await init_db()
 
         retry_delay = 5
@@ -156,23 +173,23 @@ async def main():
                 break  # Exit once polling finishes gracefully
             except TelegramNetworkError as e:
                 logger.error(
-                    "Проблема с подключением к Telegram (%s). Перезапуск через %s секунд...",
+                    "Telegram connection problem (%s). Restarting in %s seconds...",
                     e,
                     retry_delay,
                 )
                 await asyncio.sleep(retry_delay)
             except Exception as e:
-                logger.exception(f"Критическая ошибка при запуске бота: {e}")
+                logger.exception(f"Critical error while running bot: {e}")
                 break
     finally:
         if USE_PID_LOCK and lock_acquired:
             release_lock()
-        logger.info("Бот остановлен")
+        logger.info("Bot stopped")
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Бот остановлен пользователем")
+        logger.info("Bot stopped by user")
     except Exception as e:
-        logger.exception(f"Критическая ошибка: {e}")
+        logger.exception(f"Critical error: {e}")

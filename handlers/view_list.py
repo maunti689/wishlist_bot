@@ -36,7 +36,7 @@ async def view_list(message: Message, session: AsyncSession, user, state: FSMCon
         
         for item in items:
             try:
-                card_text = await format_item_card(session, item)
+                card_text = await format_item_card(session, item, language=language)
                 can_edit = False
                 if item.category and item.category.owner_id == user.id:
                     can_edit = True
@@ -188,4 +188,3 @@ async def edit_item_menu(callback: CallbackQuery, session: AsyncSession, user):
         reply_markup=get_edit_fields_keyboard(item_id, language=language)
     )
     await callback.answer()
-

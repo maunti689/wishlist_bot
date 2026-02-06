@@ -13,11 +13,18 @@ from keyboards import (
     get_categories_keyboard, get_tags_keyboard, get_location_type_keyboard,
     get_locations_keyboard, get_product_type_keyboard, get_date_input_keyboard
 )
-from utils.helpers import parse_tags, validate_price, parse_date, format_item_card, escape_markdown
+from utils.helpers import (
+    parse_tags,
+    validate_price,
+    parse_date,
+    format_item_card,
+    escape_markdown,
+    get_location_label,
+)
 from utils.notifications import send_item_added_notification
 from config import MAX_ITEMS_PER_USER
 from utils.cleanup import add_ephemeral_message, cleanup_ephemeral_messages
-from utils.localization import get_value_variants
+from utils.localization import get_value_variants, get_user_language, translate_text, DEFAULT_LANGUAGE
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -25,15 +32,24 @@ logger = logging.getLogger(__name__)
 BACK_BUTTONS = get_value_variants("buttons.back")
 SKIP_BUTTONS = get_value_variants("buttons.skip")
 
+async def _language_from_state(state: FSMContext) -> str:
+    data = await state.get_data()
+    stored_user = data.get("user")
+    return get_user_language(stored_user) if stored_user else DEFAULT_LANGUAGE
+
 @router.message(F.text.in_(get_value_variants("buttons.add_item")))
 async def add_item_start(message: Message, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     user_items = await ItemCRUD.get_user_items(session, user.id)
     
     if len(user_items) >= MAX_ITEMS_PER_USER:
         await message.answer(
-            f"❌ Достигнут лимит элементов ({MAX_ITEMS_PER_USER}). "
-            f"Удалите некоторые элементы перед добавлением новых.",
-            reply_markup=get_main_keyboard()
+            translate_text(
+                language,
+                f"❌ You reached the item limit ({MAX_ITEMS_PER_USER}). Remove existing items before adding new ones.",
+                f"❌ Достигнут лимит элементов ({MAX_ITEMS_PER_USER}). Удалите некоторые элементы перед добавлением новых."
+            ),
+            reply_markup=get_main_keyboard(language=language)
         )
         return
     
@@ -41,17 +57,20 @@ async def add_item_start(message: Message, session: AsyncSession, user, state: F
     
     if not editable_categories:
         await message.answer(
-            "❌ У вас нет категорий, где можно добавлять элементы.\n"
-            "Создайте свою категорию или попросите владельца поделиться правами на редактирование.",
-            reply_markup=get_main_keyboard()
+            translate_text(
+                language,
+                "❌ You have no categories where items can be added.\nCreate your own category or ask the owner for edit permissions.",
+                "❌ У вас нет категорий, где можно добавлять элементы.\nСоздайте свою категорию или попросите владельца поделиться правами на редактирование."
+            ),
+            reply_markup=get_main_keyboard(language=language)
         )
         return
     
     await state.update_data(user=user)
     
     msg = await message.answer(
-        "✏️ Введите название элемента:",
-        reply_markup=get_back_keyboard()
+        translate_text(language, "✏️ Enter the item name:", "✏️ Введите название элемента:"),
+        reply_markup=get_back_keyboard(language=language)
     )
     
     await state.update_data(last_bot_message=msg.message_id)
@@ -60,16 +79,19 @@ async def add_item_start(message: Message, session: AsyncSession, user, state: F
 
 @router.message(AddItemStates.name)
 async def process_item_name(message: Message, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     if message.text in BACK_BUTTONS:
         await state.clear()
         await message.answer(
-            "Главное меню:",
-            reply_markup=get_main_keyboard()
+            translate_text(language, "Main menu:", "Главное меню:"),
+            reply_markup=get_main_keyboard(language=language)
         )
         return
     
     if not message.text or message.text.strip() == "":
-        await message.answer("❌ Название элемента не может быть пустым. Попробуйте еще раз:")
+        await message.answer(
+            translate_text(language, "❌ Item name cannot be empty. Try again:", "❌ Название элемента не может быть пустым. Попробуйте еще раз:")
+        )
         return
     
     name = message.text.strip()
@@ -80,8 +102,8 @@ async def process_item_name(message: Message, session: AsyncSession, user, state
     if not categories:
         await state.clear()
         await message.answer(
-            "❌ Нет категорий, куда можно добавить элемент. Попробуйте позже.",
-            reply_markup=get_main_keyboard()
+            translate_text(language, "❌ No categories available to add this item. Try later.", "❌ Нет категорий, куда можно добавить элемент. Попробуйте позже."),
+            reply_markup=get_main_keyboard(language=language)
         )
         return
     
@@ -94,8 +116,11 @@ async def process_item_name(message: Message, session: AsyncSession, user, state
             pass
     
     msg = await message.answer(
-        f"🎯 Элемент: **{safe_name}**\n\n"
-        f"📁 Выберите категорию:",
+        translate_text(
+            language,
+            f"🎯 Item: **{safe_name}**\n\n📁 Choose a category:",
+            f"🎯 Элемент: **{safe_name}**\n\n📁 Выберите категорию:"
+        ),
         reply_markup=get_categories_keyboard(categories),
         parse_mode="Markdown"
     )
@@ -111,11 +136,15 @@ async def process_item_name(message: Message, session: AsyncSession, user, state
 
 @router.callback_query(F.data.startswith("category_"), AddItemStates.category)
 async def process_category_selection(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     category_id = int(callback.data.split("category_")[1])
 
     category = await CategoryCRUD.get_category_by_id(session, category_id)
     if not category:
-        await callback.answer("❌ Категория не найдена", show_alert=True)
+        await callback.answer(
+            translate_text(language, "❌ Category not found", "❌ Категория не найдена"),
+            show_alert=True
+        )
         return
 
     has_access = category.owner_id == user.id
@@ -124,7 +153,10 @@ async def process_category_selection(callback: CallbackQuery, session: AsyncSess
         has_access = bool(access and getattr(access, 'can_edit', False))
 
     if not has_access:
-        await callback.answer("❌ У вас нет прав на добавление в эту категорию", show_alert=True)
+        await callback.answer(
+            translate_text(language, "❌ You don't have permission to add items to this category", "❌ У вас нет прав на добавление в эту категорию"),
+            show_alert=True
+        )
         return
 
     await state.update_data(category_id=category_id)
@@ -135,14 +167,38 @@ async def process_category_selection(callback: CallbackQuery, session: AsyncSess
     safe_name = escape_markdown(name) if name else "—"
     
     kb = InlineKeyboardBuilder()
-    kb.button(text="🏷 Теги", callback_data="add_tags")
-    kb.button(text="💸 Цена", callback_data="add_price")
-    kb.button(text="📍 Место", callback_data="add_location")
-    kb.button(text="📅 Дата", callback_data="add_date")
-    kb.button(text="🔗 Ссылка", callback_data="add_url")
-    kb.button(text="💬 Комментарий", callback_data="add_comment")
-    kb.button(text="📷 Фото", callback_data="add_photo")
-    kb.button(text="✅ Завершить", callback_data="finish_item")
+    kb.button(
+        text=translate_text(language, "🏷 Tags", "🏷 Теги"),
+        callback_data="add_tags"
+    )
+    kb.button(
+        text=translate_text(language, "💸 Price", "💸 Цена"),
+        callback_data="add_price"
+    )
+    kb.button(
+        text=translate_text(language, "📍 Location", "📍 Место"),
+        callback_data="add_location"
+    )
+    kb.button(
+        text=translate_text(language, "📅 Date", "📅 Дата"),
+        callback_data="add_date"
+    )
+    kb.button(
+        text=translate_text(language, "🔗 Link", "🔗 Ссылка"),
+        callback_data="add_url"
+    )
+    kb.button(
+        text=translate_text(language, "💬 Comment", "💬 Комментарий"),
+        callback_data="add_comment"
+    )
+    kb.button(
+        text=translate_text(language, "📷 Photo", "📷 Фото"),
+        callback_data="add_photo"
+    )
+    kb.button(
+        text=translate_text(language, "✅ Finish", "✅ Завершить"),
+        callback_data="finish_item"
+    )
     kb.adjust(2)
     
     try:
@@ -151,9 +207,11 @@ async def process_category_selection(callback: CallbackQuery, session: AsyncSess
         pass
     
     msg = await callback.message.answer(
-        f"🎯 Новый элемент\n"
-        f"Название: **{safe_name}**\n\n"
-        f"Выберите, что хотите добавить:",
+        translate_text(
+            language,
+            f"🎯 New item\nName: **{safe_name}**\n\nChoose what you want to add:",
+            f"🎯 Новый элемент\nНазвание: **{safe_name}**\n\nВыберите, что хотите добавить:"
+        ),
         reply_markup=kb.as_markup(),
         parse_mode="Markdown"
     )
@@ -164,15 +222,16 @@ async def process_category_selection(callback: CallbackQuery, session: AsyncSess
 
 @router.callback_query(F.data == "add_tags", AddItemStates.select_field)
 async def add_tags_handler(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     data = await state.get_data()
     
     popular_tags = await TagCRUD.get_popular_tags(session, user.id, limit=20)
     
-    selected_text = "Выберите теги:\n\n"
+    selected_text = translate_text(language, "Choose tags:\n\n", "Выберите теги:\n\n")
     current_tags = data.get('selected_tags') or []
     if current_tags:
         formatted_tags = ", ".join(f"#{escape_markdown(t)}" for t in current_tags)
-        selected_text = f"Выбранные теги: {formatted_tags}\n\n"
+        selected_text = translate_text(language, f"Selected tags: {formatted_tags}\n\n", f"Выбранные теги: {formatted_tags}\n\n")
     
     try:
         await callback.message.delete()
@@ -180,8 +239,8 @@ async def add_tags_handler(callback: CallbackQuery, session: AsyncSession, user,
         pass
     
     msg = await callback.message.answer(
-        selected_text + "🏷 Выберите теги или введите новые через запятую:",
-        reply_markup=get_tags_keyboard(popular_tags, selected_tags=current_tags)
+        selected_text + translate_text(language, "🏷 Choose tags or type new ones separated by commas:", "🏷 Выберите теги или введите новые через запятую:"),
+        reply_markup=get_tags_keyboard(popular_tags, selected_tags=current_tags, language=language)
     )
     await state.update_data(last_bot_message=msg.message_id)
     await add_ephemeral_message(state, msg.message_id)
@@ -189,62 +248,77 @@ async def add_tags_handler(callback: CallbackQuery, session: AsyncSession, user,
 
 @router.callback_query(F.data.startswith("tag_"), AddItemStates.tags)
 async def process_tag_selection(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     tag_name = callback.data.split("tag_", 1)[1]
     data = await state.get_data()
     current_tags = data.get('selected_tags') or []
     
     if tag_name in current_tags:
         current_tags.remove(tag_name)
-        await callback.answer(f"❌ Тег '{tag_name}' удален")
+        await callback.answer(
+            translate_text(language, f"❌ Tag '{tag_name}' removed", f"❌ Тег '{tag_name}' удален")
+        )
     else:
         current_tags.append(tag_name)
         await TagCRUD.get_or_create_tag(session, tag_name, user.id)
-        await callback.answer(f"✅ Тег '{tag_name}' добавлен")
+        await callback.answer(
+            translate_text(language, f"✅ Tag '{tag_name}' added", f"✅ Тег '{tag_name}' добавлен")
+        )
     
     await state.update_data(selected_tags=current_tags)
     
     popular_tags = await TagCRUD.get_popular_tags(session, user.id, limit=20)
     selected_text = ""
     if current_tags:
-        selected_text = "Выбранные теги: " + ", ".join(f"#{t}" for t in current_tags) + "\n\n"
+        selected_text = translate_text(
+            language,
+            "Selected tags: ",
+            "Выбранные теги: "
+        ) + ", ".join(f"#{t}" for t in current_tags) + "\n\n"
     
     await callback.message.edit_text(
-        selected_text + "🏷 Выберите теги или введите новые через запятую:",
-        reply_markup=get_tags_keyboard(popular_tags, selected_tags=current_tags),
+        selected_text + translate_text(language, "🏷 Choose tags or type new ones separated by commas:", "🏷 Выберите теги или введите новые через запятую:"),
+        reply_markup=get_tags_keyboard(popular_tags, selected_tags=current_tags, language=language),
         parse_mode="Markdown"
     )
 
 @router.callback_query(F.data == "add_new_tag", AddItemStates.tags)
 async def add_new_tag_start(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    user = data.get("user")
+    language = get_user_language(user) if user else DEFAULT_LANGUAGE
     msg = await callback.message.answer(
-        "✏️ Введите название нового тега:",
-        reply_markup=get_back_keyboard()
+        translate_text(language, "✏️ Enter a new tag name:", "✏️ Введите название нового тега:"),
+        reply_markup=get_back_keyboard(language=language)
     )
     await state.set_state(AddItemStates.add_new_tag)
     await add_ephemeral_message(state, msg.message_id)
 
 @router.message(AddItemStates.add_new_tag)
 async def process_new_tag(message: Message, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     if message.text in BACK_BUTTONS:
         data = await state.get_data()
         
         popular_tags = await TagCRUD.get_popular_tags(session, user.id, limit=20)
         
-        selected_text = "Выберите теги:\n\n"
+        selected_text = translate_text(language, "Choose tags:\n\n", "Выберите теги:\n\n")
         current_tags = data.get('selected_tags') or []
         if current_tags:
-            selected_text = "Выбранные теги: " + ", ".join(f"#{t}" for t in current_tags) + "\n\n"
+            selected_text = translate_text(language, "Selected tags: ", "Выбранные теги: ") + ", ".join(f"#{t}" for t in current_tags) + "\n\n"
         
         msg2 = await message.answer(
-            selected_text + "🏷 Выберите теги или введите новые через запятую:",
-            reply_markup=get_tags_keyboard(popular_tags, selected_tags=current_tags)
+            selected_text + translate_text(language, "🏷 Choose tags or type new ones separated by commas:", "🏷 Выберите теги или введите новые через запятую:"),
+            reply_markup=get_tags_keyboard(popular_tags, selected_tags=current_tags, language=language)
         )
         await state.set_state(AddItemStates.tags)
         await add_ephemeral_message(state, msg2.message_id)
         return
 
     if not message.text or message.text.strip() == "":
-        await message.answer("❌ Название тега не может быть пустым. Попробуйте еще раз:")
+        await message.answer(
+            translate_text(language, "❌ Tag name cannot be empty. Try again:", "❌ Название тега не может быть пустым. Попробуйте еще раз:")
+        )
         return
 
     tag_name = message.text.strip().lower()
@@ -259,16 +333,18 @@ async def process_new_tag(message: Message, session: AsyncSession, user, state: 
         
         selected_text = ""
         if current_tags:
-            selected_text = "Выбранные теги: " + ", ".join(f"#{t}" for t in current_tags) + "\n\n"
+            selected_text = translate_text(language, "Selected tags: ", "Выбранные теги: ") + ", ".join(f"#{t}" for t in current_tags) + "\n\n"
             
         msg3 = await message.answer(
-            selected_text + "🏷 Выберите теги или введите новые через запятую:",
-            reply_markup=get_tags_keyboard(popular_tags, selected_tags=current_tags)
+            selected_text + translate_text(language, "🏷 Choose tags or type new ones separated by commas:", "🏷 Выберите теги или введите новые через запятую:"),
+            reply_markup=get_tags_keyboard(popular_tags, selected_tags=current_tags, language=language)
         )
         await state.set_state(AddItemStates.tags)
         await add_ephemeral_message(state, msg3.message_id)
     else:
-        await message.answer("⚠️ Этот тег уже выбран")
+        await message.answer(
+            translate_text(language, "⚠️ This tag is already selected", "⚠️ Этот тег уже выбран")
+        )
 
 @router.callback_query(F.data == "skip_tags", AddItemStates.tags)
 async def skip_tags(callback: CallbackQuery, state: FSMContext):
@@ -276,6 +352,7 @@ async def skip_tags(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddItemStates.tags)
 async def process_manual_tags(message: Message, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
@@ -290,22 +367,27 @@ async def process_manual_tags(message: Message, session: AsyncSession, user, sta
                 await TagCRUD.get_or_create_tag(session, tag, user.id)
         await state.update_data(selected_tags=current_tags)
         await message.answer(
-            f"✅ Добавлены теги: {', '.join(tags)}"
+            translate_text(language, f"✅ Added tags: {', '.join(tags)}", f"✅ Добавлены теги: {', '.join(tags)}")
         )
         await return_to_field_selection(message, state)
     else:
-        await message.answer("❌ Не удалось распознать теги. Попробуйте еще раз или нажмите 'Пропустить':")
+        await message.answer(
+            translate_text(language, "❌ Unable to recognize tags. Try again or press 'Skip'.", "❌ Не удалось распознать теги. Попробуйте еще раз или нажмите 'Пропустить':")
+        )
 
 @router.callback_query(F.data == "add_price", AddItemStates.select_field)
 async def add_price_handler(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    user = data.get("user")
+    language = get_user_language(user) if user else DEFAULT_LANGUAGE
     try:
         await callback.message.delete()
     except:
         pass
     
     msg = await callback.message.answer(
-        "💸 Введите стоимость (например: 1500) или нажмите 'Пропустить':",
-        reply_markup=get_skip_keyboard()
+        translate_text(language, "💸 Enter the price (e.g., 1500) or press 'Skip':", "💸 Введите стоимость (например: 1500) или нажмите 'Пропустить':"),
+        reply_markup=get_skip_keyboard(language=language)
     )
     await state.update_data(last_bot_message=msg.message_id)
     await add_ephemeral_message(state, msg.message_id)
@@ -313,6 +395,9 @@ async def add_price_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddItemStates.price)
 async def process_price(message: Message, state: FSMContext):
+    data = await state.get_data()
+    user = data.get("user")
+    language = get_user_language(user) if user else DEFAULT_LANGUAGE
     if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
@@ -321,24 +406,29 @@ async def process_price(message: Message, state: FSMContext):
     
     if price is not None:
         await state.update_data(price=price)
-        await message.answer(f"✅ Цена установлена: {price}")
+        await message.answer(
+            translate_text(language, f"✅ Price set: {price}", f"✅ Цена установлена: {price}")
+        )
         await return_to_field_selection(message, state)
     else:
         await message.answer(
-            "❌ Некорректная цена. Введите число (например: 1500) или нажмите 'Пропустить':",
-            reply_markup=get_skip_keyboard()
+            translate_text(language, "❌ Invalid price. Enter a number (e.g., 1500) or press 'Skip':", "❌ Некорректная цена. Введите число (например: 1500) или нажмите 'Пропустить':"),
+            reply_markup=get_skip_keyboard(language=language)
         )
 
 @router.callback_query(F.data == "add_location", AddItemStates.select_field)
 async def add_location_handler(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    state_user = data.get("user")
+    language = get_user_language(state_user) if state_user else DEFAULT_LANGUAGE
     try:
         await callback.message.delete()
     except:
         pass
     
     msg = await callback.message.answer(
-        "📍 Выберите тип местоположения:",
-        reply_markup=get_location_type_keyboard()
+        translate_text(language, "📍 Choose a location type:", "📍 Выберите тип местоположения:"),
+        reply_markup=get_location_type_keyboard(language=language)
     )
     await state.update_data(last_bot_message=msg.message_id)
     await add_ephemeral_message(state, msg.message_id)
@@ -346,6 +436,7 @@ async def add_location_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("location_type_"), AddItemStates.location_type)
 async def process_location_type(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     location_type_map = {
         "location_type_city": "в городе",
         "location_type_outside": "за городом", 
@@ -357,9 +448,15 @@ async def process_location_type(callback: CallbackQuery, session: AsyncSession, 
     if location_type:
         await state.update_data(location_type=location_type)
         locations = await LocationCRUD.get_locations_by_type(session, location_type, user.id)
+        display_name_en = get_location_label(location_type, "en")
+        display_name_ru = get_location_label(location_type, "ru")
         await callback.message.edit_text(
-            f"📍 Выберите {location_type} или добавьте новое:",
-            reply_markup=get_locations_keyboard(locations, location_type)
+            translate_text(
+                language,
+                f"📍 Choose {display_name_en} or add a new one:",
+                f"📍 Выберите {display_name_ru} или добавьте новое:"
+            ),
+            reply_markup=get_locations_keyboard(locations, location_type, language=language)
         )
         await state.set_state(AddItemStates.location_value)
     
@@ -371,6 +468,7 @@ async def skip_location_from_type(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data.startswith("location_"), AddItemStates.location_value)
 async def process_location_selection(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     parts = callback.data.split("_", 2)
     
     if len(parts) >= 3 and parts[1] != "add":
@@ -387,37 +485,51 @@ async def process_location_selection(callback: CallbackQuery, session: AsyncSess
         
         await state.update_data(location_value=location_value)
         await LocationCRUD.get_or_create_location(session, location_type, location_value, user.id)
-        await callback.message.answer(f"✅ Местоположение установлено: {location_value}")
+        await callback.message.answer(
+            translate_text(language, f"✅ Location set: {location_value}", f"✅ Местоположение установлено: {location_value}")
+        )
         await return_to_field_selection(callback, state)
     
     await callback.answer()
 
 @router.callback_query(F.data.startswith("add_location_"), AddItemStates.location_value)
 async def add_new_location_start(callback: CallbackQuery, user, state: FSMContext):
+    language = get_user_language(user)
     location_type = callback.data.split("add_location_")[1]
     await state.update_data(adding_location_type=location_type)
     
+    label_en = get_location_label(location_type, "en")
+    label_ru = get_location_label(location_type, "ru")
     await callback.message.answer(
-        f"✏️ Введите название для типа '{location_type}':",
-        reply_markup=get_back_keyboard()
+        translate_text(language, f"✏️ Enter a name for '{label_en}':", f"✏️ Введите название для типа '{label_ru}':"),
+        reply_markup=get_back_keyboard(language=language)
     )
     await state.set_state(AddItemStates.add_new_location)
 
 @router.message(AddItemStates.add_new_location)
 async def process_new_location(message: Message, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     if message.text in BACK_BUTTONS:
         data = await state.get_data()
         location_type = data.get('location_type')
         locations = await LocationCRUD.get_locations_by_type(session, location_type, user.id)
+        label_en = get_location_label(location_type, "en")
+        label_ru = get_location_label(location_type, "ru")
         await message.answer(
-            f"📍 Выберите {location_type} или добавьте новое:",
-            reply_markup=get_locations_keyboard(locations, location_type)
+            translate_text(
+                language,
+                f"📍 Choose {label_en} or add a new one:",
+                f"📍 Выберите {label_ru} или добавьте новое:"
+            ),
+            reply_markup=get_locations_keyboard(locations, location_type, language=language)
         )
         await state.set_state(AddItemStates.location_value)
         return
         
     if not message.text or message.text.strip() == "":
-        await message.answer("❌ Название местоположения не может быть пустым. Попробуйте еще раз:")
+        await message.answer(
+            translate_text(language, "❌ Location name cannot be empty. Try again:", "❌ Название местоположения не может быть пустым. Попробуйте еще раз:")
+        )
         return
     
     data = await state.get_data()
@@ -426,7 +538,9 @@ async def process_new_location(message: Message, session: AsyncSession, user, st
     
     await state.update_data(location_value=location_value)
     await LocationCRUD.get_or_create_location(session, location_type, location_value, user.id)
-    await message.answer(f"✅ Местоположение установлено: {location_value}")
+    await message.answer(
+        translate_text(language, f"✅ Location set: {location_value}", f"✅ Местоположение установлено: {location_value}")
+    )
     await return_to_field_selection(message, state)
 
 @router.callback_query(F.data == "skip_location", AddItemStates.location_value)
@@ -435,31 +549,34 @@ async def skip_location_from_value(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "add_date", AddItemStates.select_field)
 async def add_date_handler(callback: CallbackQuery, state: FSMContext):
+    language = await _language_from_state(state)
     try:
         await callback.message.delete()
     except:
         pass
     
     msg = await callback.message.answer(
-        "📅 Выберите тип даты:",
-        reply_markup=get_date_input_keyboard()
+        translate_text(language, "📅 Choose a date type:", "📅 Выберите тип даты:"),
+        reply_markup=get_date_input_keyboard(language=language)
     )
     await state.update_data(last_bot_message=msg.message_id)
     await state.set_state(AddItemStates.date_type)
 
 @router.callback_query(F.data == "date_single", AddItemStates.date_type)
 async def date_single_handler(callback: CallbackQuery, state: FSMContext):
+    language = await _language_from_state(state)
     await callback.message.edit_text(
-        "📅 Введите дату в формате ДД.ММ.ГГГГ или нажмите 'Пропустить':",
-        reply_markup=get_skip_inline_keyboard()
+        translate_text(language, "📅 Enter the date in DD.MM.YYYY format or press 'Skip':", "📅 Введите дату в формате ДД.ММ.ГГГГ или нажмите 'Пропустить':"),
+        reply_markup=get_skip_inline_keyboard(language=language)
     )
     await state.set_state(AddItemStates.date_single)
 
 @router.callback_query(F.data == "date_range", AddItemStates.date_type)
 async def date_range_handler(callback: CallbackQuery, state: FSMContext):
+    language = await _language_from_state(state)
     await callback.message.edit_text(
-        "📅 Введите начальную дату в формате ДД.ММ.ГГГГ:",
-        reply_markup=get_skip_inline_keyboard()
+        translate_text(language, "📅 Enter the start date in DD.MM.YYYY:", "📅 Введите начальную дату в формате ДД.ММ.ГГГГ:"),
+        reply_markup=get_skip_inline_keyboard(language=language)
     )
     await state.set_state(AddItemStates.date_from)
 
@@ -473,6 +590,7 @@ async def skip_field_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddItemStates.date_single)
 async def process_date_single(message: Message, state: FSMContext):
+    language = await _language_from_state(state)
     if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
@@ -480,16 +598,19 @@ async def process_date_single(message: Message, state: FSMContext):
     date_obj = parse_date(message.text)
     if date_obj:
         await state.update_data(date_from=date_obj)
-        await message.answer(f"✅ Дата установлена: {date_obj.strftime('%d.%m.%Y')}")
+        await message.answer(
+            translate_text(language, f"✅ Date set: {date_obj.strftime('%d.%m.%Y')}", f"✅ Дата установлена: {date_obj.strftime('%d.%m.%Y')}")
+        )
         await return_to_field_selection(message, state)
     else:
         await message.answer(
-            "❌ Некорректная дата. Введите дату в формате ДД.ММ.ГГГГ или нажмите 'Пропустить':",
-            reply_markup=get_skip_keyboard()
+            translate_text(language, "❌ Invalid date. Use DD.MM.YYYY or press 'Skip':", "❌ Некорректная дата. Введите дату в формате ДД.ММ.ГГГГ или нажмите 'Пропустить':"),
+            reply_markup=get_skip_keyboard(language=language)
         )
 
 @router.message(AddItemStates.date_from)
 async def process_date_from(message: Message, state: FSMContext):
+    language = await _language_from_state(state)
     if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
@@ -498,18 +619,19 @@ async def process_date_from(message: Message, state: FSMContext):
     if date_obj:
         await state.update_data(date_from=date_obj)
         await message.answer(
-            "📅 Введите конечную дату в формате ДД.ММ.ГГГГ:",
-            reply_markup=get_skip_keyboard()
+            translate_text(language, "📅 Enter the end date in DD.MM.YYYY:", "📅 Введите конечную дату в формате ДД.ММ.ГГГГ:"),
+            reply_markup=get_skip_keyboard(language=language)
         )
         await state.set_state(AddItemStates.date_to)
     else:
         await message.answer(
-            "❌ Некорректная дата. Введите дату в формате ДД.ММ.ГГГГ или нажмите 'Пропустить':",
-        reply_markup=get_skip_keyboard()
-    )
+            translate_text(language, "❌ Invalid date. Use DD.MM.YYYY or press 'Skip':", "❌ Некорректная дата. Введите дату в формате ДД.ММ.ГГГГ или нажмите 'Пропустить':"),
+            reply_markup=get_skip_keyboard(language=language)
+        )
 
 @router.message(AddItemStates.date_to)
 async def process_date_to(message: Message, state: FSMContext):
+    language = await _language_from_state(state)
     if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
@@ -520,29 +642,36 @@ async def process_date_to(message: Message, state: FSMContext):
         date_from = data.get('date_from')
         if date_from and date_obj >= date_from:
             await state.update_data(date_to=date_obj)
-            await message.answer(f"✅ Диапазон дат установлен: {date_from.strftime('%d.%m.%Y')} - {date_obj.strftime('%d.%m.%Y')}")
+            await message.answer(
+                translate_text(
+                    language,
+                    f"✅ Date range set: {date_from.strftime('%d.%m.%Y')} - {date_obj.strftime('%d.%m.%Y')}",
+                    f"✅ Диапазон дат установлен: {date_from.strftime('%d.%m.%Y')} - {date_obj.strftime('%d.%m.%Y')}"
+                )
+            )
             await return_to_field_selection(message, state)
         else:
             await message.answer(
-                "❌ Конечная дата должна быть позже начальной. Попробуйте еще раз или нажмите 'Пропустить':",
-            reply_markup=get_skip_keyboard()
-        )
+                translate_text(language, "❌ End date must be later than the start date. Try again or press 'Skip':", "❌ Конечная дата должна быть позже начальной. Попробуйте еще раз или нажмите 'Пропустить':"),
+                reply_markup=get_skip_keyboard(language=language)
+            )
     else:
         await message.answer(
-            "❌ Некорректная дата. Введите дату в формате ДД.ММ.ГГГГ или нажмите 'Пропустить':",
-            reply_markup=get_skip_keyboard()
+            translate_text(language, "❌ Invalid date. Use DD.MM.YYYY or press 'Skip':", "❌ Некорректная дата. Введите дату в формате ДД.ММ.ГГГГ или нажмите 'Пропустить':"),
+            reply_markup=get_skip_keyboard(language=language)
         )
 
 @router.callback_query(F.data == "add_url", AddItemStates.select_field)
 async def add_url_handler(callback: CallbackQuery, state: FSMContext):
+    language = await _language_from_state(state)
     try:
         await callback.message.delete()
     except:
         pass
     
     msg = await callback.message.answer(
-        "🔗 Введите ссылку или нажмите 'Пропустить':",
-        reply_markup=get_skip_keyboard()
+        translate_text(language, "🔗 Enter a link or press 'Skip':", "🔗 Введите ссылку или нажмите 'Пропустить':"),
+        reply_markup=get_skip_keyboard(language=language)
     )
     await state.update_data(last_bot_message=msg.message_id)
     await add_ephemeral_message(state, msg.message_id)
@@ -550,6 +679,7 @@ async def add_url_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddItemStates.url)
 async def process_url(message: Message, state: FSMContext):
+    language = await _language_from_state(state)
     if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
@@ -557,24 +687,27 @@ async def process_url(message: Message, state: FSMContext):
     url = message.text.strip()
     if url.startswith(('http://', 'https://')):
         await state.update_data(url=url)
-        await message.answer(f"✅ Ссылка добавлена: {url}")
+        await message.answer(
+            translate_text(language, f"✅ Link saved: {url}", f"✅ Ссылка добавлена: {url}")
+        )
         await return_to_field_selection(message, state)
     else:
         await message.answer(
-            "❌ Некорректная ссылка. Введите ссылку, начинающуюся с http:// или https://, или нажмите 'Пропустить':",
-            reply_markup=get_skip_keyboard()
+            translate_text(language, "❌ Invalid link. Use http:// or https://, or press 'Skip':", "❌ Некорректная ссылка. Введите ссылку, начинающуюся с http:// или https://, или нажмите 'Пропустить':"),
+            reply_markup=get_skip_keyboard(language=language)
         )
 
 @router.callback_query(F.data == "add_comment", AddItemStates.select_field)
 async def add_comment_handler(callback: CallbackQuery, state: FSMContext):
+    language = await _language_from_state(state)
     try:
         await callback.message.delete()
     except:
         pass
     
     msg = await callback.message.answer(
-        "💬 Введите комментарий или нажмите 'Пропустить':",
-        reply_markup=get_skip_keyboard()
+        translate_text(language, "💬 Enter a comment or press 'Skip':", "💬 Введите комментарий или нажмите 'Пропустить':"),
+        reply_markup=get_skip_keyboard(language=language)
     )
     await state.update_data(last_bot_message=msg.message_id)
     await add_ephemeral_message(state, msg.message_id)
@@ -582,25 +715,29 @@ async def add_comment_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddItemStates.comment)
 async def process_comment(message: Message, state: FSMContext):
+    language = await _language_from_state(state)
     if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
     
     comment = message.text.strip()
     await state.update_data(comment=comment)
-    await message.answer(f"✅ Комментарий добавлен: {comment}")
+    await message.answer(
+        translate_text(language, f"✅ Comment added: {comment}", f"✅ Комментарий добавлен: {comment}")
+    )
     await return_to_field_selection(message, state)
 
 @router.callback_query(F.data == "add_photo", AddItemStates.select_field)
 async def add_photo_handler(callback: CallbackQuery, state: FSMContext):
+    language = await _language_from_state(state)
     try:
         await callback.message.delete()
     except:
         pass
     
     msg = await callback.message.answer(
-        "📷 Отправьте фото или нажмите 'Пропустить':",
-        reply_markup=get_skip_keyboard()
+        translate_text(language, "📷 Send a photo or press 'Skip':", "📷 Отправьте фото или нажмите 'Пропустить':"),
+        reply_markup=get_skip_keyboard(language=language)
     )
     await state.update_data(last_bot_message=msg.message_id)
     await add_ephemeral_message(state, msg.message_id)
@@ -608,21 +745,28 @@ async def add_photo_handler(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AddItemStates.photo, F.photo.is_not(None))
 async def process_photo(message: Message, state: FSMContext):
+    language = await _language_from_state(state)
     photo = message.photo[-1]
     await state.update_data(photo_file_id=photo.file_id)
-    await message.answer("✅ Фото добавлено")
+    await message.answer(
+        translate_text(language, "✅ Photo added", "✅ Фото добавлено")
+    )
     await return_to_field_selection(message, state)
 
 @router.message(AddItemStates.photo)
 async def process_photo_text(message: Message, state: FSMContext):
+    language = await _language_from_state(state)
     if message.text in SKIP_BUTTONS:
         await return_to_field_selection(message, state)
         return
 
-    await message.answer("❌ Пожалуйста, отправьте фото или нажмите 'Пропустить':")
+    await message.answer(
+        translate_text(language, "❌ Please send a photo or press 'Skip':", "❌ Пожалуйста, отправьте фото или нажмите 'Пропустить':")
+    )
 
 @router.callback_query(F.data == "finish_item", AddItemStates.select_field)
 async def finish_item(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     data = await state.get_data()
     
     name = data.get('name')
@@ -638,13 +782,18 @@ async def finish_item(callback: CallbackQuery, session: AsyncSession, user, stat
     photo_file_id = data.get('photo_file_id')
     
     if not name or not category_id:
-        await callback.answer("❌ Ошибка: отсутствует название или категория")
+        await callback.answer(
+            translate_text(language, "❌ Error: missing name or category", "❌ Ошибка: отсутствует название или категория")
+        )
         return
     
     try:
         category = await CategoryCRUD.get_category_by_id(session, category_id)
         if not category:
-            await callback.answer("❌ Категория недоступна", show_alert=True)
+            await callback.answer(
+                translate_text(language, "❌ Category unavailable", "❌ Категория недоступна"),
+                show_alert=True
+            )
             return
 
         has_access = category.owner_id == user.id
@@ -653,7 +802,10 @@ async def finish_item(callback: CallbackQuery, session: AsyncSession, user, stat
             has_access = bool(access and getattr(access, 'can_edit', False))
 
         if not has_access:
-            await callback.answer("❌ У вас нет прав добавлять элементы в эту категорию", show_alert=True)
+            await callback.answer(
+                translate_text(language, "❌ You don't have permission to add items to this category", "❌ У вас нет прав добавлять элементы в эту категорию"),
+                show_alert=True
+            )
             return
 
         item_data = {
@@ -678,7 +830,7 @@ async def finish_item(callback: CallbackQuery, session: AsyncSession, user, stat
         if category and category.sharing_type in ["view_only", "collaborative"]:
             await send_item_added_notification(callback.bot, category, item, user)
         
-        item_card = await format_item_card(session, item)
+        item_card = await format_item_card(session, item, language=language)
         
         try:
             await callback.message.delete()
@@ -695,38 +847,49 @@ async def finish_item(callback: CallbackQuery, session: AsyncSession, user, stat
                 photo=item.photo_file_id,
                 caption=item_card,
                 parse_mode="Markdown",
-                reply_markup=get_main_keyboard()
+                reply_markup=get_main_keyboard(language=language)
             )
         else:
             await callback.message.answer(
                 item_card,
                 parse_mode="Markdown",
-                reply_markup=get_main_keyboard()
+                reply_markup=get_main_keyboard(language=language)
             )
         
-        await callback.answer("✅ Элемент успешно добавлен!")
+        await callback.answer(
+            translate_text(language, "✅ Item added successfully!", "✅ Элемент успешно добавлен!")
+        )
         await state.clear()
         
     except Exception as e:
         try:
-            logger.exception("Ошибка при завершении добавления элемента. state=%s", data)
+            logger.exception("Error while finishing item creation. state=%s", data)
         except Exception:
             pass
-        await callback.answer(f"❌ Ошибка при создании элемента: {str(e)}")
+        await callback.answer(
+            translate_text(language, f"❌ Failed to create item: {str(e)}", f"❌ Ошибка при создании элемента: {str(e)}")
+        )
 
 async def return_to_field_selection(message_or_callback, state: FSMContext):
     data = await state.get_data()
     name = data.get('name')
+    user = data.get('user')
+    language = get_user_language(user) if user else DEFAULT_LANGUAGE
+
+    if name:
+        safe_name = escape_markdown(str(name))
+    else:
+        safe_name = translate_text(language, "Unnamed", "Без названия")
     
     kb = InlineKeyboardBuilder()
-    kb.button(text="🏷 Теги", callback_data="add_tags")
-    kb.button(text="💸 Цена", callback_data="add_price")
-    kb.button(text="📍 Место", callback_data="add_location")
-    kb.button(text="📅 Дата", callback_data="add_date")
-    kb.button(text="🔗 Ссылка", callback_data="add_url")
-    kb.button(text="💬 Комментарий", callback_data="add_comment")
-    kb.button(text="📷 Фото", callback_data="add_photo")
-    kb.button(text="✅ Завершить", callback_data="finish_item")
+    kb.button(text=translate_text(language, "🏷 Tags", "🏷 Теги"), callback_data="add_tags")
+    kb.button(text=translate_text(language, "💸 Price", "💸 Цена"), callback_data="add_price")
+    kb.button(text=translate_text(language, "📍 Location", "📍 Место"), callback_data="add_location")
+    kb.button(text=translate_text(language, "📅 Date", "📅 Дата"), callback_data="add_date")
+    kb.button(text=translate_text(language, "🔗 Link", "🔗 Ссылка"), callback_data="add_url")
+    kb.button(text=translate_text(language, "💬 Comment", "💬 Комментарий"), callback_data="add_comment")
+    kb.button(text=translate_text(language, "📷 Photo", "📷 Фото"), callback_data="add_photo")
+    kb.button(text=translate_text(language, "✅ Finish", "✅ Завершить"), callback_data="finish_item")
     kb.adjust(2)
     
     last_message_id = data.get('last_bot_message')
@@ -745,19 +908,20 @@ async def return_to_field_selection(message_or_callback, state: FSMContext):
         except:
             pass
     
+    prompt_text = translate_text(
+        language,
+        f"🎯 New item\nName: **{safe_name}**\n\nChoose what you want to add:",
+        f"🎯 Новый элемент\nНазвание: **{safe_name}**\n\nВыберите, что хотите добавить:"
+    )
     if hasattr(message_or_callback, 'message'):
         msg = await message_or_callback.message.answer(
-            f"🎯 Новый элемент\n"
-            f"Название: **{safe_name}**\n\n"
-            f"Выберите, что хотите добавить:",
+            prompt_text,
             reply_markup=kb.as_markup(),
             parse_mode="Markdown"
         )
     else:
         msg = await message_or_callback.answer(
-            f"🎯 Новый элемент\n"
-            f"Название: **{safe_name}**\n\n"
-            f"Выберите, что хотите добавить:",
+            prompt_text,
             reply_markup=kb.as_markup(),
             parse_mode="Markdown"
         )

@@ -6,9 +6,39 @@ from sqlalchemy import select, or_, and_
 from database.models import AsyncSessionLocal, Item, User, Category, SharedCategory
 from config import NOTIFICATION_DAYS_BEFORE
 from utils.helpers import escape_markdown
+from utils.localization import translate_text, get_user_language
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _user_language(user: User) -> str:
+    """Return normalized language for a DB user object."""
+    return get_user_language(user) if user else None
+
+
+def _display_name(user: User, language: str) -> str:
+    """Escape and localize fallback name for notifications."""
+    fallback = translate_text(language, "User", "Пользователь")
+    raw_name = user.first_name or user.username or fallback
+    return escape_markdown(raw_name)
+
+
+def _action_text(update_type: str, language: str) -> str:
+    """Return localized verb describing an item update."""
+    actions_en = {
+        "edit": "edited",
+        "delete": "deleted",
+        "move": "moved"
+    }
+    actions_ru = {
+        "edit": "отредактировал",
+        "delete": "удалил",
+        "move": "переместил"
+    }
+    default_en = "updated"
+    default_ru = "изменил"
+    return translate_text(language, actions_en.get(update_type, default_en), actions_ru.get(update_type, default_ru))
 
 class NotificationScheduler:
     
@@ -18,22 +48,22 @@ class NotificationScheduler:
     
     async def start(self):
         self.running = True
-        logger.info("Планировщик уведомлений запущен")
+        logger.info("Notification scheduler started")
         
         await self.check_notifications()
-        logger.info("⚡ Немедленная проверка уведомлений завершена")
+        logger.info("Immediate notification check finished")
 
         while self.running:
             try:
                 await self.check_notifications()
                 await asyncio.sleep(3600)
             except Exception as e:
-                logger.error(f"Ошибка в планировщике уведомлений: {e}")
+                logger.error(f"Error inside notification scheduler: {e}")
                 await asyncio.sleep(300)
     
     async def stop(self):
         self.running = False
-        logger.info("Планировщик уведомлений остановлен")
+        logger.info("Notification scheduler stopped")
     
     async def check_notifications(self):
         async with AsyncSessionLocal() as session:
@@ -90,19 +120,38 @@ class NotificationScheduler:
     
     async def _send_item_reminder(self, user: User, item: Item, days_before: int):
         try:
+            language = _user_language(user)
             date_val = getattr(item, "date_from", None) or getattr(item, "date", None)
             if not date_val:
                 return
             safe_name = escape_markdown(item.name)
-            comment_text = f"\n💬 {escape_markdown(item.comment)}" if item.comment else ""
+            comment_text = ""
+            if item.comment:
+                comment_text = translate_text(
+                    language,
+                    f"\n💬 Comment: {escape_markdown(item.comment)}",
+                    f"\n💬 Комментарий: {escape_markdown(item.comment)}"
+                )
             if days_before == 1:
-                text = f"🔔 Напоминание!\n\n" \
-                       f"Завтра ({date_val.strftime('%d.%m.%Y')}) у вас запланирован элемент:\n" \
-                       f"🎯 **{safe_name}**"
+                text = translate_text(
+                    language,
+                    "🔔 Reminder!\n\n"
+                    f"Tomorrow ({date_val.strftime('%d.%m.%Y')}) you have a scheduled item:\n"
+                    f"🎯 **{safe_name}**",
+                    "🔔 Напоминание!\n\n"
+                    f"Завтра ({date_val.strftime('%d.%m.%Y')}) у вас запланирован элемент:\n"
+                    f"🎯 **{safe_name}**"
+                )
             else:
-                text = f"🔔 Напоминание!\n\n" \
-                       f"Через {days_before} дней ({date_val.strftime('%d.%m.%Y')}) у вас запланирован элемент:\n" \
-                       f"🎯 **{safe_name}**"
+                text = translate_text(
+                    language,
+                    "🔔 Reminder!\n\n"
+                    f"In {days_before} days ({date_val.strftime('%d.%m.%Y')}) you have a scheduled item:\n"
+                    f"🎯 **{safe_name}**",
+                    "🔔 Напоминание!\n\n"
+                    f"Через {days_before} дней ({date_val.strftime('%d.%m.%Y')}) у вас запланирован элемент:\n"
+                    f"🎯 **{safe_name}**"
+                )
             text += comment_text
             await self.bot.send_message(
                 chat_id=user.telegram_id,
@@ -110,21 +159,28 @@ class NotificationScheduler:
                 parse_mode="Markdown"
             )
         except Exception as e:
-            logger.error(f"Ошибка отправки напоминания пользователю {user.telegram_id}: {e}")
+            logger.error(f"Failed to send reminder to user {user.telegram_id}: {e}")
     
     async def _send_category_reminder(self, user: User, category: Category):
         try:
+            language = _user_language(user)
             safe_category_name = escape_markdown(category.name)
-            text = f"🔔 Напоминание о категории!\n\n" \
-                   f"Через 7 дней ({category.date.strftime('%d.%m.%Y')}) наступает дата категории:\n" \
-                   f"📁 **{safe_category_name}**"
+            text = translate_text(
+                language,
+                "🔔 Category reminder!\n\n"
+                f"In 7 days ({category.date.strftime('%d.%m.%Y')}) this category is due:\n"
+                f"📁 **{safe_category_name}**",
+                "🔔 Напоминание о категории!\n\n"
+                f"Через 7 дней ({category.date.strftime('%d.%m.%Y')}) наступает дата категории:\n"
+                f"📁 **{safe_category_name}**"
+            )
             await self.bot.send_message(
                 chat_id=user.telegram_id,
                 text=text,
                 parse_mode="Markdown"
             )
         except Exception as e:
-            logger.error(f"Ошибка отправки напоминания о категории пользователю {user.telegram_id}: {e}")
+            logger.error(f"Failed to send category reminder to user {user.telegram_id}: {e}")
 
 async def send_item_added_notification(bot: Bot, category: Category, item: Item, user: User):
     try:
@@ -150,11 +206,17 @@ async def send_item_added_notification(bot: Bot, category: Category, item: Item,
 
             for notify_user in users_to_notify:
                 try:
+                    language = _user_language(notify_user)
                     safe_category_name = escape_markdown(category.name)
-                    author_name = escape_markdown(user.first_name or user.username or 'Пользователь')
+                    author_name = _display_name(user, language)
                     item_name = escape_markdown(item.name)
-                    text = (
-                        f"📢 Новый элемент в общей категории!\n\n"
+                    text = translate_text(
+                        language,
+                        "📢 New item in a shared category!\n\n"
+                        f"📁 Category: **{safe_category_name}**\n"
+                        f"👤 Added by: {author_name}\n"
+                        f"🎯 Item: **{item_name}**",
+                        "📢 Новый элемент в общей категории!\n\n"
                         f"📁 Категория: **{safe_category_name}**\n"
                         f"👤 Добавил: {author_name}\n"
                         f"🎯 Элемент: **{item_name}**"
@@ -174,9 +236,9 @@ async def send_item_added_notification(bot: Bot, category: Category, item: Item,
                             parse_mode="Markdown"
                         )
                 except Exception as e:
-                    logger.error(f"Ошибка отправки уведомления пользователю {notify_user.telegram_id}: {e}")
+                    logger.error(f"Failed to notify user {notify_user.telegram_id}: {e}")
     except Exception as e:
-        logger.error(f"Ошибка в send_item_added_notification: {e}")
+        logger.error(f"Error in send_item_added_notification: {e}")
 
 async def send_item_updated_notification(bot: Bot, category: Category, item: Item, user: User, update_type: str):
     try:
@@ -200,22 +262,22 @@ async def send_item_updated_notification(bot: Bot, category: Category, item: Ite
             )
             users_to_notify = result.scalars().all()
 
-            update_texts = {
-                "edit": "отредактировал",
-                "delete": "удалил",
-                "move": "переместил"
-            }
-            action = update_texts.get(update_type, "изменил")
-
             for notify_user in users_to_notify:
                 try:
+                    language = _user_language(notify_user)
                     safe_category_name = escape_markdown(category.name)
-                    author_name = escape_markdown(user.first_name or user.username or 'Пользователь')
+                    author_name = _display_name(user, language)
                     item_name = escape_markdown(item.name)
-                    text = (
-                        f"🔄 Изменение в общей категории!\n\n"
+                    action_text = _action_text(update_type, language)
+                    text = translate_text(
+                        language,
+                        "🔄 Shared category update!\n\n"
+                        f"📁 Category: **{safe_category_name}**\n"
+                        f"👤 {author_name} {action_text} an item:\n"
+                        f"🎯 **{item_name}**",
+                        "🔄 Изменение в общей категории!\n\n"
                         f"📁 Категория: **{safe_category_name}**\n"
-                        f"👤 {author_name} {action} элемент:\n"
+                        f"👤 {author_name} {action_text} элемент:\n"
                         f"🎯 **{item_name}**"
                     )
                     
@@ -233,19 +295,27 @@ async def send_item_updated_notification(bot: Bot, category: Category, item: Ite
                             parse_mode="Markdown"
                         )
                 except Exception as e:
-                    logger.error(f"Ошибка отправки уведомления пользователю {notify_user.telegram_id}: {e}")
+                    logger.error(f"Failed to notify user {notify_user.telegram_id}: {e}")
     except Exception as e:
-        logger.error(f"Ошибка в send_item_updated_notification: {e}")
+        logger.error(f"Error in send_item_updated_notification: {e}")
 
 async def send_category_shared_notification(bot: Bot, category: Category, owner: User, shared_user: User):
     try:
+        language = _user_language(shared_user)
         safe_category_name = escape_markdown(category.name)
-        owner_name = escape_markdown(owner.first_name or owner.username or 'Пользователь')
-        text = (
-            f"🔗 Вам предоставлен доступ к категории!\n\n"
+        owner_name = _display_name(owner, language)
+        access_type_en = "View only" if category.sharing_type == "view_only" else "Edit"
+        access_type_ru = "Просмотр" if category.sharing_type == "view_only" else "Редактирование"
+        text = translate_text(
+            language,
+            "🔗 You have been granted access to a category!\n\n"
+            f"📁 Category: **{safe_category_name}**\n"
+            f"👤 Owner: {owner_name}\n"
+            f"🔐 Access type: {access_type_en}",
+            "🔗 Вам предоставлен доступ к категории!\n\n"
             f"📁 Категория: **{safe_category_name}**\n"
             f"👤 Владелец: {owner_name}\n"
-            f"🔐 Тип доступа: {'Просмотр' if category.sharing_type == 'view_only' else 'Редактирование'}"
+            f"🔐 Тип доступа: {access_type_ru}"
         )
         
         await bot.send_message(
@@ -254,14 +324,19 @@ async def send_category_shared_notification(bot: Bot, category: Category, owner:
             parse_mode="Markdown"
         )
     except Exception as e:
-        logger.error(f"Ошибка отправки уведомления о доступе пользователю {shared_user.telegram_id}: {e}")
+        logger.error(f"Failed to send category access notification to user {shared_user.telegram_id}: {e}")
 
 async def send_category_access_revoked_notification(bot: Bot, category: Category, owner: User, revoked_user: User):
     try:
+        language = _user_language(revoked_user)
         safe_category_name = escape_markdown(category.name)
-        owner_name = escape_markdown(owner.first_name or owner.username or 'Пользователь')
-        text = (
-            f"❌ Доступ к категории отозван!\n\n"
+        owner_name = _display_name(owner, language)
+        text = translate_text(
+            language,
+            "❌ Category access revoked!\n\n"
+            f"📁 Category: **{safe_category_name}**\n"
+            f"👤 Owner: {owner_name}",
+            "❌ Доступ к категории отозван!\n\n"
             f"📁 Категория: **{safe_category_name}**\n"
             f"👤 Владелец: {owner_name}"
         )
@@ -272,4 +347,4 @@ async def send_category_access_revoked_notification(bot: Bot, category: Category
             parse_mode="Markdown"
         )
     except Exception as e:
-        logger.error(f"Ошибка отправки уведомления об отзыве доступа пользователю {revoked_user.telegram_id}: {e}")
+        logger.error(f"Failed to send access revocation notification to user {revoked_user.telegram_id}: {e}")

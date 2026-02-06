@@ -35,7 +35,7 @@ async def start_handler(message: Message, session: AsyncSession, user, state: FS
 @router.message(F.text.in_(get_value_variants("buttons.back")))
 async def back_to_main(message: Message, user, state: FSMContext):
     current_state = await state.get_state()
-    logger.info(f"Нажата кнопка 'Назад' в состоянии: {current_state}")
+    logger.info(f"'Back' button pressed in state: {current_state}")
     
     await state.clear()
     language = get_user_language(user)

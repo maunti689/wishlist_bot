@@ -19,6 +19,7 @@ if not BOT_TOKEN:
 
 # Database connection
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./wishlist.db")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Notification settings
 NOTIFICATION_DAYS_BEFORE = [7, 1]  # Days before date when reminders are sent

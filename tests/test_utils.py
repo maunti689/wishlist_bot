@@ -24,8 +24,8 @@ def test_parse_date():
 
 
 def test_format_price():
-    assert format_price(1000.0) == "1 000 ₽"
-    assert format_price(1000.5) == "1 000.50 ₽"
+    assert format_price(1000.0) == "1 000"
+    assert format_price(1000.5) == "1 000.50"
 
 
 def test_week_month_ranges():

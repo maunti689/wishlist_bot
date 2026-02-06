@@ -12,10 +12,10 @@ from keyboards import (
     get_category_management_keyboard, get_category_sharing_keyboard,
     get_sharing_type_keyboard, get_confirmation_keyboard
 )
-from utils.helpers import format_item_card, escape_markdown
+from utils.helpers import format_item_card, escape_markdown, format_price
 from utils.cleanup import schedule_delete_message
 from utils.notifications import send_category_shared_notification, send_category_access_revoked_notification
-from utils.localization import translate as _, translate_text, get_user_language, get_value_variants
+from utils.localization import translate as _, translate_text, get_user_language, get_value_variants, DEFAULT_LANGUAGE
 
 router = Router()
 BACK_BUTTONS = get_value_variants("buttons.back")
@@ -49,7 +49,7 @@ async def manage_categories_menu(message: Message, session: AsyncSession, user, 
             reply_markup=get_categories_list_keyboard(categories, user.id, language=language)
         )
     except Exception as e:
-        logger.error(f"Ошибка в manage_categories_menu: {e}")
+        logger.error(f"Error in manage_categories_menu: {e}")
         await message.answer(
             translate_text(language, "❌ Failed to load categories.", "❌ Произошла ошибка при загрузке категорий."),
             reply_markup=get_main_keyboard(language=language)
@@ -105,7 +105,7 @@ async def category_menu(callback: CallbackQuery, session: AsyncSession, user):
         )
         
     except Exception as e:
-        logger.error(f"Ошибка в category_menu: {e}")
+        logger.error(f"Error in category_menu: {e}")
         await callback.answer(translate_text(language, "❌ Something went wrong", "❌ Произошла ошибка"))
     
     await callback.answer()
@@ -170,7 +170,7 @@ async def category_sharing_menu(callback: CallbackQuery, session: AsyncSession, 
         schedule_delete_message(callback.bot, callback.message.chat.id, m.message_id, delay=30)
         
     except Exception as e:
-        logger.error(f"Ошибка в category_sharing_menu: {e}")
+        logger.error(f"Error in category_sharing_menu: {e}")
         await callback.answer(translate_text(language, "❌ Something went wrong", "❌ Произошла ошибка"))
     
     await callback.answer()
@@ -190,26 +190,31 @@ async def change_sharing_type(callback: CallbackQuery, session: AsyncSession, us
         await state.set_state(ManageCategoryStates.change_sharing_type)
         
     except Exception as e:
-        logger.error(f"Ошибка в change_sharing_type: {e}")
+        logger.error(f"Error in change_sharing_type: {e}")
         await callback.answer(translate_text(get_user_language(user), "❌ Something went wrong", "❌ Произошла ошибка"))
     
     await callback.answer()
 
 @router.callback_query(F.data.startswith("sharing_"), ManageCategoryStates.change_sharing_type)
-async def process_sharing_type_change(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+async def process_sharing_type_change(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
     try:
+        language = get_user_language(user)
         sharing_type = callback.data.split("sharing_")[1]
         
         data = await state.get_data()
         category_id = data.get('category_id')
         
         if not category_id:
-            await callback.answer("❌ Ошибка: категория не найдена")
+            await callback.answer(
+                translate_text(language, "❌ Category not found", "❌ Категория не найдена")
+            )
             return
         
         category = await CategoryCRUD.get_category_by_id(session, category_id)
         if not category:
-            await callback.answer("❌ Категория не найдена")
+            await callback.answer(
+                translate_text(language, "❌ Category not found", "❌ Категория не найдена")
+            )
             return
         old_type = category.sharing_type
 
@@ -231,77 +236,112 @@ async def process_sharing_type_change(callback: CallbackQuery, session: AsyncSes
                 await send_category_access_revoked_notification(callback.bot, category, callback.from_user, u)
         
         sharing_names = {
-            "private": "🔒 Личная",
-            "view_only": "👁 Только просмотр",
-            "collaborative": "✍️ Общая"
+            "private": translate_text(language, "🔒 Private", "🔒 Личная"),
+            "view_only": translate_text(language, "👁 View only", "👁 Только просмотр"),
+            "collaborative": translate_text(language, "✍️ Collaborative", "✍️ Общая")
         }
         
-        text = f"✅ Тип доступа изменен на: {sharing_names.get(sharing_type)}"
+        text = translate_text(
+            language,
+            f"✅ Access type changed to: {sharing_names.get(sharing_type)}",
+            f"✅ Тип доступа изменен на: {sharing_names.get(sharing_type)}"
+        )
         
         if sharing_type != "private" and share_code:
-            text += f"\n\n🔑 Код для доступа:\n`{share_code}`\n\nДайте этот код тем, кому хотите предоставить доступ к категории."
+            text += translate_text(
+                language,
+                f"\n\n🔑 Access code:\n`{share_code}`\n\nShare this code with people who need access to the category.",
+                f"\n\n🔑 Код для доступа:\n`{share_code}`\n\nДайте этот код тем, кому хотите предоставить доступ к категории."
+            )
         
         m = await callback.message.answer(text, parse_mode="Markdown")
         schedule_delete_message(callback.bot, callback.message.chat.id, m.message_id, delay=20)
         await state.clear()
         
     except Exception as e:
-        logger.error(f"Ошибка в process_sharing_type_change: {e}")
-        await callback.answer("❌ Произошла ошибка")
+        logger.error(f"Error in process_sharing_type_change: {e}")
+        await callback.answer(
+            translate_text(language if 'language' in locals() else None, "❌ Something went wrong", "❌ Произошла ошибка")
+        )
         await state.clear()
     
     await callback.answer()
 
 @router.callback_query(F.data.startswith("get_share_link_"))
-async def get_share_code(callback: CallbackQuery, session: AsyncSession):
+async def get_share_code(callback: CallbackQuery, session: AsyncSession, user):
     try:
+        language = get_user_language(user)
         category_id = int(callback.data.split("get_share_link_")[1])
         
         category = await CategoryCRUD.get_category_by_id(session, category_id)
         
         if not category:
-            await callback.answer("❌ Категория не найдена")
+            await callback.answer(
+                translate_text(language, "❌ Category not found", "❌ Категория не найдена")
+            )
             return
         
         if category.sharing_type == "private":
-            await callback.answer("❌ Личные категории нельзя расшаривать")
+            await callback.answer(
+                translate_text(language, "❌ Private categories cannot be shared", "❌ Личные категории нельзя расшаривать")
+            )
             return
         
-        access_type = "просмотра" if category.sharing_type == "view_only" else "редактирования"
+        access_type_en = "viewing" if category.sharing_type == "view_only" else "editing"
+        access_type_ru = "просмотра" if category.sharing_type == "view_only" else "редактирования"
         code = category.share_link or await CategoryCRUD.ensure_share_code(session, category_id)
         
         safe_category_name = escape_markdown(category.name)
-        text = (
-            f"🔑 **Код для доступа к категории**\n"
-            f"📂 {safe_category_name}\n\n"
-            f"Код для {access_type}:\n"
-            f"`{code}`\n\n"
-            f"📋 Инструкция:\n"
-            f"1. Отправьте этот код другому пользователю\n"
-            f"2. Пользователь должен нажать кнопку '🔑 Ввести код' в главном меню\n"
-            f"3. Ввести полученный код\n"
-            f"4. Получить доступ к категории"
+        text = translate_text(
+            language,
+            (
+                f"🔑 **Category access code**\n"
+                f"📂 {safe_category_name}\n\n"
+                f"Code for {access_type_en}:\n"
+                f"`{code}`\n\n"
+                f"📋 Instructions:\n"
+                f"1. Send this code to another user\n"
+                f"2. They must tap '🔑 Enter code' in the main menu\n"
+                f"3. Enter the received code\n"
+                f"4. Gain access to the category"
+            ),
+            (
+                f"🔑 **Код для доступа к категории**\n"
+                f"📂 {safe_category_name}\n\n"
+                f"Код для {access_type_ru}:\n"
+                f"`{code}`\n\n"
+                f"📋 Инструкция:\n"
+                f"1. Отправьте этот код другому пользователю\n"
+                f"2. Пользователь должен нажать кнопку '🔑 Ввести код' в главном меню\n"
+                f"3. Ввести полученный код\n"
+                f"4. Получить доступ к категории"
+            )
         )
         
         m = await callback.message.answer(text, parse_mode="Markdown")
         schedule_delete_message(callback.bot, callback.message.chat.id, m.message_id, delay=30)
         
     except Exception as e:
-        logger.error(f"Ошибка в get_share_code: {e}")
-        await callback.answer("❌ Произошла ошибка")
+        logger.error(f"Error in get_share_code: {e}")
+        await callback.answer(
+            translate_text(language if 'language' in locals() else None, "❌ Something went wrong", "❌ Произошла ошибка")
+        )
     
     await callback.answer()
 
 @router.callback_query(F.data.startswith("category_stats_"))
-async def category_stats(callback: CallbackQuery, session: AsyncSession):
+async def category_stats(callback: CallbackQuery, session: AsyncSession, user):
     try:
+        language = get_user_language(user)
         category_id = int(callback.data.split("category_stats_")[1])
         
         category = await CategoryCRUD.get_category_by_id(session, category_id)
         items = await ItemCRUD.get_items_by_category(session, category_id)
         
         if not category:
-            await callback.answer("❌ Категория не найдена")
+            await callback.answer(
+                translate_text(language, "❌ Category not found", "❌ Категория не найдена")
+            )
             return
         
         total_items = len(items)
@@ -325,7 +365,17 @@ async def category_stats(callback: CallbackQuery, session: AsyncSession):
         unique_tags = len(set(all_tags))
         
         safe_category_name = escape_markdown(category.name)
-        text = (
+        from utils.helpers import format_price
+        text_en = (
+            f"📊 **Category stats**\n"
+            f"📂 {safe_category_name}\n\n"
+            f"🎯 Total items: {total_items}\n"
+            f"💸 With price: {items_with_price}\n"
+            f"📅 With dates: {items_with_date}\n"
+            f"📷 With photos: {items_with_photo}\n"
+            f"🏷 Unique tags: {unique_tags}\n\n"
+        )
+        text_ru = (
             f"📊 **Статистика категории**\n"
             f"📂 {safe_category_name}\n\n"
             f"🎯 Всего элементов: {total_items}\n"
@@ -336,62 +386,78 @@ async def category_stats(callback: CallbackQuery, session: AsyncSession):
         )
         
         if total_value > 0:
-            from utils.helpers import format_price
-            text += f"💰 Общая стоимость: {format_price(total_value)}\n"
+            text_en += f"💰 Total value: {format_price(total_value)}\n"
+            text_ru += f"💰 Общая стоимость: {format_price(total_value)}\n"
         
         if avg_price > 0:
-            text += f"📈 Средняя цена: {format_price(avg_price)}\n"
+            text_en += f"📈 Average price: {format_price(avg_price)}\n"
+            text_ru += f"📈 Средняя цена: {format_price(avg_price)}\n"
         
-        await callback.message.answer(text, parse_mode="Markdown")
+        await callback.message.answer(
+            translate_text(language, text_en, text_ru),
+            parse_mode="Markdown"
+        )
         
     except Exception as e:
-        logger.error(f"Ошибка в category_stats: {e}")
-        await callback.answer("❌ Произошла ошибка")
+        logger.error(f"Error in category_stats: {e}")
+        await callback.answer(
+            translate_text(language if 'language' in locals() else None, "❌ Something went wrong", "❌ Произошла ошибка")
+        )
     
     await callback.answer()
 
 @router.callback_query(F.data.startswith("category_rename_"))
-async def category_rename_start(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+async def category_rename_start(callback: CallbackQuery, session: AsyncSession, user, state: FSMContext):
     try:
+        language = get_user_language(user)
         category_id = int(callback.data.split("category_rename_")[1])
         
         category = await CategoryCRUD.get_category_by_id(session, category_id)
         
         if not category:
-            await callback.answer("❌ Категория не найдена")
+            await callback.answer(
+                translate_text(language, "❌ Category not found", "❌ Категория не найдена")
+            )
             return
         
         await state.update_data(category_id=category_id)
         
         safe_category_name = escape_markdown(category.name)
         m = await callback.message.answer(
-            f"✏️ Переименование категории\n"
-            f"Текущее название: **{safe_category_name}**\n\n"
-            f"Введите новое название:",
-            reply_markup=get_back_keyboard(),
+            translate_text(
+                language,
+                f"✏️ Category rename\nCurrent name: **{safe_category_name}**\n\nEnter a new name:",
+                f"✏️ Переименование категории\nТекущее название: **{safe_category_name}**\n\nВведите новое название:"
+            ),
+            reply_markup=get_back_keyboard(language=language),
             parse_mode="Markdown"
         )
         await state.set_state(ManageCategoryStates.rename)
         schedule_delete_message(callback.bot, callback.message.chat.id, m.message_id, delay=30)
         
     except Exception as e:
-        logger.error(f"Ошибка в category_rename_start: {e}")
-        await callback.answer("❌ Произошла ошибка")
+        logger.error(f"Error in category_rename_start: {e}")
+        await callback.answer(
+            translate_text(language if 'language' in locals() else None, "❌ Something went wrong", "❌ Произошла ошибка")
+        )
     
     await callback.answer()
 
 @router.message(ManageCategoryStates.rename)
 async def process_category_rename(message: Message, session: AsyncSession, user, state: FSMContext):
+    language = get_user_language(user)
     if message.text in BACK_BUTTONS:
         await state.clear()
         await message.answer(
-            "🏠 Главное меню",
-            reply_markup=get_main_keyboard()
+            translate_text(language, "🏠 Main menu", "🏠 Главное меню"),
+            reply_markup=get_main_keyboard(language=language)
         )
         return
         
     if not message.text or message.text.strip() == "":
-        await message.answer("❌ Название не может быть пустым. Попробуйте еще раз:")
+        await message.answer(
+            translate_text(language, "❌ Name cannot be empty. Try again:", "❌ Название не может быть пустым. Попробуйте еще раз:")
+        )
         return
     
     try:
@@ -400,8 +466,8 @@ async def process_category_rename(message: Message, session: AsyncSession, user,
         
         if not category_id:
             await message.answer(
-                "❌ Ошибка: категория не найдена.",
-                reply_markup=get_main_keyboard()
+                translate_text(language, "❌ Category not found.", "❌ Ошибка: категория не найдена."),
+                reply_markup=get_main_keyboard(language=language)
             )
             await state.clear()
             return
@@ -409,11 +475,15 @@ async def process_category_rename(message: Message, session: AsyncSession, user,
         new_name = message.text.strip()
         
         if len(new_name) > 100:
-            await message.answer("❌ Название слишком длинное (максимум 100 символов). Попробуйте еще раз:")
+            await message.answer(
+                translate_text(language, "❌ Name is too long (max 100 characters). Try again:", "❌ Название слишком длинное (максимум 100 символов). Попробуйте еще раз:")
+            )
             return
         
         if len(new_name) < 2:
-            await message.answer("❌ Название слишком короткое (минимум 2 символа). Попробуйте еще раз:")
+            await message.answer(
+                translate_text(language, "❌ Name is too short (min 2 characters). Try again:", "❌ Название слишком короткое (минимум 2 символа). Попробуйте еще раз:")
+            )
             return
         
         user_categories = await CategoryCRUD.get_user_categories(session, user.id)
@@ -422,8 +492,11 @@ async def process_category_rename(message: Message, session: AsyncSession, user,
         
         if new_name.lower() in existing_names:
             await message.answer(
-                f"❌ Категория с названием '{new_name}' уже существует. "
-                f"Введите другое название:"
+                translate_text(
+                    language,
+                    f"❌ Category named '{new_name}' already exists.\nEnter a different name:",
+                    f"❌ Категория с названием '{new_name}' уже существует.\nВведите другое название:"
+                )
             )
             return
 
@@ -431,58 +504,80 @@ async def process_category_rename(message: Message, session: AsyncSession, user,
         await state.clear()
 
         m = await message.answer(
-            f"✅ Категория переименована в: **{escape_markdown(new_name)}**",
-            reply_markup=get_main_keyboard(),
+            translate_text(
+                language,
+                f"✅ Category renamed to: **{escape_markdown(new_name)}**",
+                f"✅ Категория переименована в: **{escape_markdown(new_name)}**"
+            ),
+            reply_markup=get_main_keyboard(language=language),
             parse_mode="Markdown"
         )
         schedule_delete_message(message.bot, message.chat.id, m.message_id, delay=10)
         
     except Exception as e:
-        logger.error(f"Ошибка в process_category_rename: {e}")
+        logger.error(f"Error in process_category_rename: {e}")
         await message.answer(
-            "❌ Произошла ошибка при переименовании категории.",
-            reply_markup=get_main_keyboard()
+            translate_text(language, "❌ Failed to rename the category.", "❌ Произошла ошибка при переименовании категории."),
+            reply_markup=get_main_keyboard(language=language)
         )
         await state.clear()
 
 @router.callback_query(F.data.startswith("category_delete_"))
-async def category_delete_confirm(callback: CallbackQuery, session: AsyncSession):
+async def category_delete_confirm(callback: CallbackQuery, session: AsyncSession, user):
     try:
+        language = get_user_language(user)
         category_id = int(callback.data.split("category_delete_")[1])
         
         category = await CategoryCRUD.get_category_by_id(session, category_id)
         items = await ItemCRUD.get_items_by_category(session, category_id)
         
         if not category:
-            await callback.answer("❌ Категория не найдена")
+            await callback.answer(
+                translate_text(language, "❌ Category not found", "❌ Категория не найдена")
+            )
             return
         
         items_count = len(items)
-        warning = f"\n⚠️ В категории {items_count} элементов - они будут удалены!" if items_count > 0 else ""
+        warning = ""
+        if items_count > 0:
+            warning = translate_text(
+                language,
+                f"\n⚠️ This category contains {items_count} item(s) — they will be deleted!",
+                f"\n⚠️ В категории {items_count} элементов — они будут удалены!"
+            )
         
         await callback.message.answer(
-            f"❓ Вы уверены, что хотите удалить категорию '{category.name}'?{warning}",
-            reply_markup=get_confirmation_keyboard("delete_category", category_id)
+            translate_text(
+                language,
+                f"❓ Delete category '{category.name}'?{warning}",
+                f"❓ Вы уверены, что хотите удалить категорию '{category.name}'?{warning}"
+            ),
+            reply_markup=get_confirmation_keyboard("delete_category", category_id, language=language)
         )
         
     except Exception as e:
-        logger.error(f"Ошибка в category_delete_confirm: {e}")
-        await callback.answer("❌ Произошла ошибка")
+        logger.error(f"Error in category_delete_confirm: {e}")
+        await callback.answer(
+            translate_text(language if 'language' in locals() else None, "❌ Something went wrong", "❌ Произошла ошибка")
+        )
     
     await callback.answer()
 
 @router.callback_query(F.data.startswith("confirm_delete_category_"))
-async def confirm_delete_category(callback: CallbackQuery, session: AsyncSession):
+async def confirm_delete_category(callback: CallbackQuery, session: AsyncSession, user):
     try:
+        language = get_user_language(user)
         category_id = int(callback.data.split("confirm_delete_category_")[1])
         
         category = await CategoryCRUD.get_category_by_id(session, category_id)
         
         if not category:
-            await callback.answer("❌ Категория не найдена")
+            await callback.answer(
+                translate_text(language, "❌ Category not found", "❌ Категория не найдена")
+            )
             return
         
-        category_name = category.name
+        category_name = escape_markdown(category.name)
         
         items = await ItemCRUD.get_items_by_category(session, category_id)
         for item in items:
@@ -490,43 +585,60 @@ async def confirm_delete_category(callback: CallbackQuery, session: AsyncSession
         
         await CategoryCRUD.delete_category(session, category_id)
         
-        await callback.message.edit_text(f"✅ Категория '{category_name}' удалена!")
+        await callback.message.edit_text(
+            translate_text(
+                language,
+                f"✅ Category '{category_name}' deleted!",
+                f"✅ Категория '{category_name}' удалена!"
+            ),
+            parse_mode="Markdown"
+        )
         
     except Exception as e:
-        logger.error(f"Ошибка в confirm_delete_category: {e}")
-        await callback.message.edit_text("❌ Произошла ошибка при удалении категории")
+        logger.error(f"Error in confirm_delete_category: {e}")
+        await callback.message.edit_text(
+            translate_text(language if 'language' in locals() else None, "❌ Failed to delete the category", "❌ Произошла ошибка при удалении категории")
+        )
     
     await callback.answer()
 
 @router.callback_query(F.data.startswith("cancel_delete_category_"))
-async def cancel_delete_category(callback: CallbackQuery):
-    await callback.message.edit_text("❌ Удаление отменено")
+async def cancel_delete_category(callback: CallbackQuery, user):
+    language = get_user_language(user)
+    await callback.message.edit_text(
+        translate_text(language, "❌ Deletion cancelled", "❌ Удаление отменено")
+    )
     await callback.answer()
 
 @router.callback_query(F.data == "back_to_main")
-async def back_to_main_menu(callback: CallbackQuery):
+async def back_to_main_menu(callback: CallbackQuery, user):
+    language = get_user_language(user)
     await callback.message.answer(
-        "🏠 Главное меню",
-        reply_markup=get_main_keyboard()
+        translate_text(language, "🏠 Main menu", "🏠 Главное меню"),
+        reply_markup=get_main_keyboard(language=language)
     )
     await callback.answer()
 
 @router.callback_query(F.data == "back_to_categories")
 async def back_to_categories(callback: CallbackQuery, session: AsyncSession, user):
     try:
+        language = get_user_language(user)
         categories = await CategoryCRUD.get_user_categories(session, user.id)
         
         await callback.message.answer(
-            "📂 Управление категориями\n\n"
-            "Выберите категорию для управления:",
-            reply_markup=get_categories_list_keyboard(categories, user.id)
+            translate_text(
+                language,
+                "📂 Category management\n\nChoose a category to manage:",
+                "📂 Управление категориями\n\nВыберите категорию для управления:"
+            ),
+            reply_markup=get_categories_list_keyboard(categories, user.id, language=language)
         )
         
     except Exception as e:
-        logger.error(f"Ошибка в back_to_categories: {e}")
+        logger.error(f"Error in back_to_categories: {e}")
         await callback.message.answer(
-            "❌ Произошла ошибка при загрузке категорий.",
-            reply_markup=get_main_keyboard()
+            translate_text(language if 'language' in locals() else None, "❌ Failed to load categories.", "❌ Произошла ошибка при загрузке категорий."),
+            reply_markup=get_main_keyboard(language=language if 'language' in locals() else DEFAULT_LANGUAGE)
         )
     
     await callback.answer()

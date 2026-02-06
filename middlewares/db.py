@@ -27,7 +27,8 @@ class DatabaseMiddleware(BaseMiddleware):
                         telegram_id=event.from_user.id,
                         username=event.from_user.username,
                         first_name=event.from_user.first_name,
-                        last_name=event.from_user.last_name
+                        last_name=event.from_user.last_name,
+                        language=event.from_user.language_code,
                     )
                     data["user"] = user
 

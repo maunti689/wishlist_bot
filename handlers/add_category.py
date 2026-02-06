@@ -38,7 +38,7 @@ async def add_category_start(message: Message, session: AsyncSession, user, stat
         await state.set_state(AddCategoryStates.name)
         
     except Exception as e:
-        logger.error(f"Ошибка в add_category_start: {e}")
+        logger.error(f"Error in add_category_start: {e}")
         await message.answer(
             translate_text(language, "❌ Something went wrong. Please try again.", "❌ Произошла ошибка. Попробуйте еще раз."),
             reply_markup=get_main_keyboard(language=language)
@@ -105,7 +105,7 @@ async def process_category_name(message: Message, session: AsyncSession, user, s
         await state.set_state(AddCategoryStates.sharing_type)
         
     except Exception as e:
-        logger.error(f"Ошибка в process_category_name: {e}")
+        logger.error(f"Error in process_category_name: {e}")
         await message.answer(
             translate_text(language, "❌ Failed to process the name. Please try again.", "❌ Произошла ошибка при обработке названия. Попробуйте еще раз."),
             reply_markup=get_main_keyboard(language=language)
@@ -192,7 +192,7 @@ async def process_category_sharing_type(callback: CallbackQuery, session: AsyncS
         )
         
     except Exception as e:
-        logger.error(f"Ошибка в process_category_sharing_type: {e}")
+        logger.error(f"Error in process_category_sharing_type: {e}")
         await callback.message.answer(
             translate_text(language, "❌ Failed to create category. Please try again.", "❌ Произошла ошибка при создании категории. Попробуйте еще раз."),
             reply_markup=get_main_keyboard(language=language)

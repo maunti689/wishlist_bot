@@ -7,9 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 async def clear_chat(message: Message, bot: Bot, delay: int = 2):
-    """
-    Удаляет предыдущие сообщения в чате после задержки
-    """
+    """Delete the last bot/user messages after a short delay."""
     await asyncio.sleep(delay)
     try:
         await bot.delete_message(message.chat.id, message.message_id)
@@ -29,7 +27,7 @@ async def delete_previous_message(state: FSMContext, message: Message):
             except:
                 pass
     except Exception as e:
-        logger.error(f"Ошибка при удалении сообщения: {e}")
+        logger.error(f"Error while deleting a message: {e}")
 
 async def replace_message(message: Message, new_text: str, reply_markup=None, state: FSMContext=None):
     try:
@@ -47,5 +45,5 @@ async def replace_message(message: Message, new_text: str, reply_markup=None, st
         
         return new_msg
     except Exception as e:
-        logger.error(f"Ошибка при замене сообщения: {e}")
+        logger.error(f"Error while replacing a message: {e}")
         return None

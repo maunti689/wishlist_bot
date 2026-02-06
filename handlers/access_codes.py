@@ -11,7 +11,7 @@ from utils.cleanup import add_ephemeral_message, cleanup_ephemeral_messages, sch
 from utils.helpers import escape_markdown
 from utils.localization import translate_text, get_user_language, get_value_variants
 from utils.redis_client import get_redis_connection
-from config import ACCESS_CODE_MAX_ATTEMPTS, ACCESS_CODE_BLOCK_SECONDS
+from config import ACCESS_CODE_MAX_ATTEMPTS, ACCESS_CODE_BLOCK_SECONDS, ACCESS_CODE_LENGTH
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ async def _get_block_ttl(user_id: int) -> int:
     try:
         redis = await get_redis_connection()
     except Exception as exc:
-        logger.warning("Redis недоступен для проверки лимита попыток: %s", exc)
+        logger.warning("Redis unavailable while checking attempt limits: %s", exc)
         return 0
     key = _attempts_key(user_id)
     try:
@@ -43,7 +43,7 @@ async def _get_block_ttl(user_id: int) -> int:
             ttl = ACCESS_CODE_BLOCK_SECONDS
         return ttl
     except Exception as exc:
-        logger.warning("Не удалось получить TTL попыток: %s", exc)
+        logger.warning("Failed to fetch attempt TTL: %s", exc)
         return 0
 
 
@@ -51,7 +51,7 @@ async def _register_failed_attempt(user_id: int) -> int:
     try:
         redis = await get_redis_connection()
     except Exception as exc:
-        logger.warning("Redis недоступен для фиксации попыток: %s", exc)
+        logger.warning("Redis unavailable to record attempts: %s", exc)
         return 0
     key = _attempts_key(user_id)
     try:
@@ -74,7 +74,7 @@ async def _register_failed_attempt(user_id: int) -> int:
             return ttl
         return 0
     except Exception as exc:
-        logger.warning("Не удалось обновить попытки доступа: %s", exc)
+        logger.warning("Failed to update access attempts: %s", exc)
         return 0
 
 
@@ -86,7 +86,7 @@ async def _reset_attempts(user_id: int) -> None:
     try:
         await redis.delete(_attempts_key(user_id))
     except Exception as exc:
-        logger.warning("Не удалось сбросить попытки: %s", exc)
+        logger.warning("Failed to reset attempts: %s", exc)
 
 
 def _format_block_text(language: str, seconds: int) -> str:
@@ -114,17 +114,19 @@ async def _inform_rate_limit(message: Message, language: str, ttl: int):
 @router.message(F.text.in_(get_value_variants("buttons.enter_code")))
 async def enter_code_start(message: Message, user, state: FSMContext):
     """Entry point when a user wants to type an access code."""
-    logger.info(f"Пользователь {message.from_user.id} нажал 'Ввести код'")
+    logger.info(f"User {message.from_user.id} pressed 'Enter code'")
     
     language = get_user_language(user)
+    code_length_text_en = (
+        f"🔑 Enter a {ACCESS_CODE_LENGTH}-character access code for a category.\n\n"
+        "The code may include letters and numbers, e.g. `ABC123`"
+    )
+    code_length_text_ru = (
+        f"🔑 Введите код доступа из {ACCESS_CODE_LENGTH} символов.\n\n"
+        "Код может содержать буквы и цифры, например `ABC123`"
+    )
     msg = await message.answer(
-        translate_text(
-            language,
-            "🔑 Enter a 6-digit access code for a category.\n\n"
-            "The code should look like `123456`",
-            "🔑 Введите 6-значный код доступа к категории.\n\n"
-            "Код должен выглядеть примерно так: `123456`"
-        ),
+        translate_text(language, code_length_text_en, code_length_text_ru),
         reply_markup=get_back_keyboard(language=language),
         parse_mode="Markdown"
     )
@@ -134,7 +136,7 @@ async def enter_code_start(message: Message, user, state: FSMContext):
 @router.message(ManageCategoryStates.enter_access_code)
 async def process_access_code(message: Message, session: AsyncSession, user, state: FSMContext):
     """Validate and process the access code provided by the user."""
-    logger.info(f"Обработка кода доступа: {message.text}")
+    logger.info(f"Processing access code: {message.text}")
     language = get_user_language(user)
 
     current_block = await _get_block_ttl(user.id)
@@ -159,15 +161,19 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
         await add_ephemeral_message(state, msg.message_id)
         return
 
-    code = message.text.strip()
+    code = message.text.strip().upper()
 
-    if len(code) != 6 or not code.isdigit():
+    if len(code) != ACCESS_CODE_LENGTH or not code.isalnum():
         ttl = await _register_failed_attempt(user.id)
         if ttl:
             await _inform_rate_limit(message, language, ttl)
         else:
             await message.answer(
-                translate_text(language, "❌ The code must contain 6 digits. Try again:", "❌ Код должен состоять из 6 цифр. Попробуйте еще раз:"),
+                translate_text(
+                    language,
+                    f"❌ The code must contain {ACCESS_CODE_LENGTH} letters and/or digits. Try again:",
+                    f"❌ Код должен содержать {ACCESS_CODE_LENGTH} символов (буквы/цифры). Попробуйте еще раз:"
+                ),
                 reply_markup=get_back_keyboard(language=language)
             )
         return
@@ -175,7 +181,7 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
     try:
         category = await CategoryCRUD.get_category_by_share_link(session, code)
     except Exception as e:
-        logger.error(f"Ошибка получения категории по коду: {e}")
+        logger.error(f"Failed to load category by code: {e}")
         msg = await message.answer(
             translate_text(language, "❌ An error occurred while searching for the category. Try again later.", "❌ Произошла ошибка при поиске категории. Попробуйте позже."),
             reply_markup=get_main_keyboard(language=language)
@@ -228,7 +234,7 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
     try:
         existing_access = await CategoryCRUD.check_user_access(session, category.id, user.id)
     except Exception as e:
-        logger.error(f"Ошибка проверки доступа: {e}")
+        logger.error(f"Failed to check shared access: {e}")
         await message.answer(
             translate_text(language, "❌ Failed to verify access.", "❌ Произошла ошибка при проверке доступа."),
             reply_markup=get_main_keyboard(language=language)
@@ -286,7 +292,7 @@ async def process_access_code(message: Message, session: AsyncSession, user, sta
         schedule_delete_message(message.bot, message.chat.id, msg.message_id, delay=10)
         
     except Exception as e:
-        logger.error(f"Ошибка добавления доступа: {e}")
+        logger.error(f"Failed to grant shared access: {e}")
         msg = await message.answer(
             translate_text(language, "❌ Failed to grant access. Please try again later.", "❌ Произошла ошибка при добавлении доступа. Попробуйте позже."),
             reply_markup=get_main_keyboard(language=language)

@@ -14,8 +14,14 @@ from keyboards import (
     get_item_actions_keyboard, get_back_keyboard
 )
 from utils.helpers import (
-    format_item_card_sync, get_week_range, get_month_range, 
-    parse_date, validate_price, parse_price_filter
+    format_item_card_sync,
+    get_week_range,
+    get_month_range,
+    parse_date,
+    validate_price,
+    parse_price_filter,
+    get_location_label,
+    get_product_type_label,
 )
 from utils.cleanup import schedule_delete_message
 from utils.localization import translate_text, get_user_language, get_value_variants
@@ -47,7 +53,7 @@ async def filter_by_category(callback: CallbackQuery, session: AsyncSession, use
         )
         schedule_delete_message(callback.bot, callback.message.chat.id, msg.message_id, delay=30)
     except Exception as e:
-        logger.error(f"Ошибка в filter_by_category: {e}")
+        logger.error(f"Error in filter_by_category: {e}")
         await callback.answer(translate_text(get_user_language(user), "❌ Something went wrong", "❌ Произошла ошибка"))
     await callback.answer()
 
@@ -66,7 +72,7 @@ async def apply_category_filter(callback: CallbackQuery, session: AsyncSession, 
             language
         )
     except Exception as e:
-        logger.error(f"Ошибка в apply_category_filter: {e}")
+        logger.error(f"Error in apply_category_filter: {e}")
         await callback.message.answer(
             translate_text(language, "❌ Failed to apply filter", "❌ Произошла ошибка при применении фильтра"),
             reply_markup=get_main_keyboard(language=language)
@@ -87,7 +93,7 @@ async def filter_by_tag(callback: CallbackQuery, session: AsyncSession, user, st
         )
         schedule_delete_message(callback.bot, callback.message.chat.id, msg.message_id, delay=30)
     except Exception as e:
-        logger.error(f"Ошибка в filter_by_tag: {e}")
+        logger.error(f"Error in filter_by_tag: {e}")
         await callback.answer(translate_text(get_user_language(user), "❌ Something went wrong", "❌ Произошла ошибка"))
     await callback.answer()
 
@@ -101,11 +107,11 @@ async def apply_tag_filter(callback: CallbackQuery, session: AsyncSession, user,
         await show_filtered_results(
             callback.message,
             items,
-            translate_text(language, f"Tag:
+            translate_text(language, f"Tag: {tag_name}", f"Тег: {tag_name}"),
             language
         )
     except Exception as e:
-        logger.error(f"Ошибка в apply_tag_filter: {e}")
+        logger.error(f"Error in apply_tag_filter: {e}")
         await callback.message.answer(
             translate_text(language, "❌ Failed to apply filter", "❌ Произошла ошибка при применении фильтра"),
             reply_markup=get_main_keyboard(language=language)
@@ -132,22 +138,22 @@ async def apply_price_filter(callback: CallbackQuery, session: AsyncSession, use
         
         if price_filter == "price_max_1000":
             filters['price_max'] = 1000
-            filter_text = translate_text(language, "up to 1000 ₽", "до 1000 ₽")
+            filter_text = translate_text(language, "up to 1000", "до 1000")
         elif price_filter == "price_range_1000_3000":
             filters['price_min'] = 1000
             filters['price_max'] = 3000
-            filter_text = "1000-3000 ₽"
+            filter_text = "1000-3000"
         elif price_filter == "price_range_3000_5000":
             filters['price_min'] = 3000
             filters['price_max'] = 5000
-            filter_text = "3000-5000 ₽"
+            filter_text = "3000-5000"
         elif price_filter == "price_range_5000_10000":
             filters['price_min'] = 5000
             filters['price_max'] = 10000
-            filter_text = "5000-10000 ₽"
+            filter_text = "5000-10000"
         elif price_filter == "price_min_10000":
             filters['price_min'] = 10000
-            filter_text = translate_text(language, "from 10000 ₽", "от 10000 ₽")
+            filter_text = translate_text(language, "from 10000", "от 10000")
         elif price_filter == "price_exact":
             msg = await callback.message.answer(
                 translate_text(language, "💰 Enter an exact amount:", "💰 Введите точную сумму:"), 
@@ -168,7 +174,7 @@ async def apply_price_filter(callback: CallbackQuery, session: AsyncSession, use
             )
             
     except Exception as e:
-        logger.error(f"Ошибка в apply_price_filter: {e}")
+        logger.error(f"Error in apply_price_filter: {e}")
         await callback.message.answer(
             translate_text(language, "❌ Failed to apply filter", "❌ Произошла ошибка при применении фильтра"),
             reply_markup=get_main_keyboard(language=language)
@@ -188,14 +194,14 @@ async def process_exact_price_filter(message: Message, session: AsyncSession, us
         return
     
     try:
-        is_valid, price = validate_price(message.text)
-        if is_valid and price is not None:
+        price = validate_price(message.text)
+        if price is not None:
             filters = {'price_exact': price}
             items = await ItemCRUD.filter_items(session, user.id, filters)
             await show_filtered_results(
                 message,
                 items,
-                translate_text(language, f"Exact price: {price} ₽", f"Точная цена: {price} ₽"),
+                translate_text(language, f"Exact price: {price}", f"Точная цена: {price}"),
                 language
             )
             await state.clear()
@@ -204,7 +210,7 @@ async def process_exact_price_filter(message: Message, session: AsyncSession, us
                 translate_text(language, "❌ Invalid amount. Try again:", "❌ Некорректная цена. Попробуйте еще раз:")
             )
     except Exception as e:
-        logger.error(f"Ошибка в process_exact_price_filter: {e}")
+        logger.error(f"Error in process_exact_price_filter: {e}")
         await message.answer(
             translate_text(language, "❌ Failed to process price", "❌ Произошла ошибка при обработке цены"),
             reply_markup=get_main_keyboard(language=language)
@@ -234,7 +240,7 @@ async def filter_this_week(callback: CallbackQuery, session: AsyncSession, user,
             language
         )
     except Exception as e:
-        logger.error(f"Ошибка в filter_this_week: {e}")
+        logger.error(f"Error in filter_this_week: {e}")
         await callback.message.answer(
             translate_text(language, "❌ Failed to apply filter", "❌ Произошла ошибка при применении фильтра"),
             reply_markup=get_main_keyboard(language=language)
@@ -255,7 +261,7 @@ async def filter_this_month(callback: CallbackQuery, session: AsyncSession, user
             language
         )
     except Exception as e:
-        logger.error(f"Ошибка в filter_this_month: {e}")
+        logger.error(f"Error in filter_this_month: {e}")
         await callback.message.answer(
             translate_text(language, "❌ Failed to apply filter", "❌ Произошла ошибка при применении фильтра"),
             reply_markup=get_main_keyboard(language=language)
@@ -297,7 +303,7 @@ async def process_date_from(message: Message, user, state: FSMContext):
                 translate_text(language, "❌ Invalid date. Use DD.MM.YYYY:", "❌ Некорректная дата. Используйте формат ДД.ММ.ГГГГ:")
             )
     except Exception as e:
-        logger.error(f"Ошибка в process_date_from: {e}")
+        logger.error(f"Error in process_date_from: {e}")
         await message.answer(
             translate_text(language, "❌ Failed to process date", "❌ Произошла ошибка при обработке даты"),
             reply_markup=get_main_keyboard(language=language)
@@ -344,7 +350,7 @@ async def process_date_to(message: Message, session: AsyncSession, user, state: 
                 translate_text(language, "❌ Invalid date. Use DD.MM.YYYY:", "❌ Некорректная дата. Используйте формат ДД.ММ.ГГГГ:")
             )
     except Exception as e:
-        logger.error(f"Ошибка в process_date_to: {e}")
+        logger.error(f"Error in process_date_to: {e}")
         await message.answer(
             translate_text(language, "❌ Failed to process date", "❌ Произошла ошибка при обработке даты"),
             reply_markup=get_main_keyboard(language=language)
@@ -370,34 +376,31 @@ async def filter_by_location_type(callback: CallbackQuery, session: AsyncSession
             "location_type_district": "по району"
         }
         location_type = location_type_map.get(callback.data)
-        display_map = {
-            "в городе": translate_text(language, "in the city", "в городе"),
-            "за городом": translate_text(language, "outside the city", "за городом"),
-            "по району": translate_text(language, "by district", "по району")
-        }
         
         if location_type:
             locations = await LocationCRUD.get_locations_by_type(session, location_type, user.id)
+            label_en = get_location_label(location_type, "en")
+            label_ru = get_location_label(location_type, "ru")
             if not locations:
                 filters = {'location_type': location_type}
                 items = await ItemCRUD.filter_items(session, user.id, filters)
                 await show_filtered_results(
                     callback.message,
                     items,
-                    translate_text(language, f"Type: {display_map.get(location_type, location_type)}", f"Тип: {display_map.get(location_type, location_type)}"),
+                    translate_text(language, f"Type: {label_en}", f"Тип: {label_ru}"),
                     language
                 )
             else:
                 await callback.message.answer(
                     translate_text(
                         language,
-                        f"📍 Choose a specific place ({display_map.get(location_type, location_type)}):",
-                        f"📍 Выберите конкретное место ({display_map.get(location_type, location_type)}):"
+                        f"📍 Choose a specific place ({label_en}):",
+                        f"📍 Выберите конкретное место ({label_ru}):"
                     ), 
                     reply_markup=get_locations_keyboard(locations, location_type, include_skip=True, language=language)
                 )
     except Exception as e:
-        logger.error(f"Ошибка в filter_by_location_type: {e}")
+        logger.error(f"Error in filter_by_location_type: {e}")
         await callback.message.answer(
             translate_text(language, "❌ Failed to apply filter", "❌ Произошла ошибка при применении фильтра"),
             reply_markup=get_main_keyboard(language=language)
@@ -415,8 +418,14 @@ async def apply_location_filter(callback: CallbackQuery, session: AsyncSession, 
             
         parts = callback.data.split("_", 2)
         if len(parts) >= 3:
-            location_type = parts[1]
+            location_type_key = parts[1]
             location_value = parts[2]
+            location_type_map = {
+                "city": "в городе",
+                "outside": "за городом",
+                "district": "по району"
+            }
+            location_type = location_type_map.get(location_type_key, location_type_key)
             filters = {'location_type': location_type, 'location_value': location_value}
             items = await ItemCRUD.filter_items(session, user.id, filters)
             await show_filtered_results(
@@ -426,7 +435,7 @@ async def apply_location_filter(callback: CallbackQuery, session: AsyncSession, 
                 language
             )
     except Exception as e:
-        logger.error(f"Ошибка в apply_location_filter: {e}")
+        logger.error(f"Error in apply_location_filter: {e}")
         await callback.message.answer(
             translate_text(language, "❌ Failed to apply filter", "❌ Произошла ошибка при применении фильтра"),
             reply_markup=get_main_keyboard(language=language)
@@ -450,14 +459,16 @@ async def apply_product_type_filter(callback: CallbackQuery, session: AsyncSessi
         product_type = callback.data.split("type_")[1]
         filters = {'product_type': product_type}
         items = await ItemCRUD.filter_items(session, user.id, filters)
+        label_en = get_product_type_label(product_type, "en")
+        label_ru = get_product_type_label(product_type, "ru")
         await show_filtered_results(
             callback.message,
             items,
-            translate_text(language, f"Type: {product_type}", f"Тип: {product_type}"),
+            translate_text(language, f"Type: {label_en}", f"Тип: {label_ru}"),
             language
         )
     except Exception as e:
-        logger.error(f"Ошибка в apply_product_type_filter: {e}")
+        logger.error(f"Error in apply_product_type_filter: {e}")
         await callback.message.answer(
             translate_text(language, "❌ Failed to apply filter", "❌ Произошла ошибка при применении фильтра"),
             reply_markup=get_main_keyboard(language=language)
@@ -478,7 +489,7 @@ async def clear_filters(callback: CallbackQuery, session: AsyncSession, user, st
             language
         )
     except Exception as e:
-        logger.error(f"Ошибка в clear_filters: {e}")
+        logger.error(f"Error in clear_filters: {e}")
         await callback.message.answer(
             translate_text(language, "❌ Failed to reset filters", "❌ Произошла ошибка при сбросе фильтров"),
             reply_markup=get_main_keyboard(language=language)
@@ -511,22 +522,22 @@ async def show_filtered_results(message: Message, items: list, filter_descriptio
         
         for item in items[:10]:
             try:
-                card_text = format_item_card_sync(item)
+                card_text = format_item_card_sync(item, language=language)
                 if item.photo_file_id:
                     await message.answer_photo(
                         photo=item.photo_file_id, 
                         caption=card_text, 
-                        reply_markup=get_item_actions_keyboard(item.id, language=language), 
+                        reply_markup=get_item_actions_keyboard(item.id, can_edit=False, language=language), 
                         parse_mode="Markdown"
                     )
                 else:
                     await message.answer(
                         card_text, 
-                        reply_markup=get_item_actions_keyboard(item.id, language=language), 
+                        reply_markup=get_item_actions_keyboard(item.id, can_edit=False, language=language), 
                         parse_mode="Markdown"
                     )
             except Exception as e:
-                logger.error(f"Ошибка при показе элемента {item.id}: {e}")
+                logger.error(f"Error while showing item {item.id}: {e}")
                 continue
         
         if len(items) > 10:
@@ -541,7 +552,7 @@ async def show_filtered_results(message: Message, items: list, filter_descriptio
         schedule_delete_message(message.bot, message.chat.id, m2.message_id, delay=15)
         
     except Exception as e:
-        logger.error(f"Ошибка в show_filtered_results: {e}")
+        logger.error(f"Error in show_filtered_results: {e}")
         await message.answer(
             translate_text(language, "❌ Failed to display results", "❌ Произошла ошибка при показе результатов"), 
             reply_markup=get_main_keyboard(language=language)
