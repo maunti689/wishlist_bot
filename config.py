@@ -3,14 +3,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
 def _get_bool(name: str, default: bool = False) -> bool:
     """Read boolean values from environment variables."""
     value = os.getenv(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-
 
 # Bot token
 BOT_TOKEN = os.getenv("BOT_TOKEN")
