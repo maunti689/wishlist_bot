@@ -13,10 +13,20 @@ A Telegram bot for managing personal and shared wishlists: categories, filters, 
 
 ## Screenshots
 - **Main Menu & Category List** – shows multilingual UI, quick actions, and shared categories.
-- **Add Item Flow** – demonstrates tagging, pricing, and location steps with inline keyboards.
-- **Filters & Results** – illustrates date/price filters and paginated outputs.
+  
+  ![Main menu](screenshots/main_menu.jpg)
 
-*(Add your image links or embedded files here, e.g. `![Main menu](docs/screenshots/main-menu.png)`.)*
+- **Add Item Flow** – demonstrates tagging, pricing, and location steps with inline keyboards.
+  
+  ![Add item](screenshots/add_item.jpg)
+
+- **Add Shared Category** – highlights access code generation and permission presets.
+  
+  ![Add shared category](screenshots/add_shared_category.jpg)
+
+- **Shared Category (Viewer)** – example of what collaborators see with read-only access.
+  
+  ![Shared category view](screenshots/shared_category_view_from_another_user.jpg)
 
 ## Quick Start
 1. Install **Python 3.11+** and create a virtual environment.
