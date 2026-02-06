@@ -9,6 +9,15 @@ A Telegram bot for managing personal and shared wishlists: categories, filters, 
 - Reminders for upcoming dates and activity tracking for shared lists
 - Multilingual UI (RU/EN) with translated buttons and menus
 
+> **Note:** Certain data in screenshots and code samples is redacted per client agreement.
+
+## Screenshots
+- **Main Menu & Category List** – shows multilingual UI, quick actions, and shared categories.
+- **Add Item Flow** – demonstrates tagging, pricing, and location steps with inline keyboards.
+- **Filters & Results** – illustrates date/price filters and paginated outputs.
+
+*(Add your image links or embedded files here, e.g. `![Main menu](docs/screenshots/main-menu.png)`.)*
+
 ## Quick Start
 1. Install **Python 3.11+** and create a virtual environment.
 2. Install dependencies:
